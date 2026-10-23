@@ -2,13 +2,13 @@
 
 <h1 align="center">Freespin</h1>
 
-<p align="center">A native Swift replacement for Logi Options+ on macOS, built from a reverse-engineered spec of how Options+ really scrolls.</p>
+<p align="center">A native Swift replacement for Logi Options+ on macOS, with smooth, high-resolution scrolling for Logitech mice.</p>
 
 <p align="center"><img src="docs/screenshot.png" width="760" alt="Freespin settings window showing an MX Master 3S"></p>
 
 ## Why
 
-Logi Options+ is a 541 MB Electron app plus a 310 MB native agent with a Qt runtime, an updater, analytics and cloud accounts, all to tune a mouse. Freespin is one 2.8 MB SwiftUI app that talks HID++ to the device directly and reproduces Options+'s smooth scrolling from its decompiled algorithm.
+Logi Options+ is a 541 MB Electron app plus a 310 MB native agent with a Qt runtime, an updater, analytics and cloud accounts, all to tune a mouse. Freespin is one 2.8 MB SwiftUI app that talks HID++ to the device directly and does its own smooth scrolling.
 
 ## Freespin vs Options+
 
@@ -28,7 +28,7 @@ Memory is the physical footprint reported by `top`. Idle CPU is the process's CP
 
 ## Features
 
-- **Smooth scrolling that matches Options+.** The wheel is diverted to HID++ high-resolution reports (15 steps per notch on the MX Master 3S) and run through a port of Options+'s `wheel_mouse_handler`: period timing, hysteresis, ratchet detection, middle-click suppression and its exact acceleration curve. A port of its injector turns the result into continuous pixel scroll events with the same line and fixed-point fields. Recorded traces match Options+ in event structure and ≈10.3 vs 10.4 px per line.
+- **Smooth, high-resolution scrolling.** The wheel is diverted to HID++ high-resolution reports (15 steps per notch on the MX Master 3S) and run through a wheel processor with period timing, hysteresis, ratchet detection, middle-click suppression and an acceleration curve. The result is posted as continuous pixel scroll events with line and fixed-point fields filled in. Recorded traces match Options+ in event structure and ≈10.3 vs 10.4 px per line.
 - **Scroll speed and direction**, and native line scrolling when smooth scrolling is off (the wheel is handed back to macOS).
 - **Thumb wheel** horizontal scrolling with its own speed and direction.
 - **SmartShift**: on/off, sensitivity, and ratchet force on wheels that have it.
@@ -103,12 +103,12 @@ FreespinApp ── SwiftUI window
 | Package | Role |
 |---|---|
 | `HIDPP` | IOKit transport, HID++ framing, request/response matching, typed features |
-| `ScrollEngine` | Pure-Swift port of the Options+ wheel pipeline (no AppKit, deterministic, unit-tested) |
+| `ScrollEngine` | Pure-Swift wheel pipeline: timing, acceleration and scroll event modelling (no AppKit, deterministic, unit-tested) |
 | `EventSynth` | Posting scroll, key and mouse events; gesture and Actions Ring logic |
 | `FreespinCore` | Discovery, per-device sessions, settings store, frontmost-app tracking |
 | `FreespinApp` / `freespinctl` | The app and the CLI |
 
-The spec comes from static analysis of the shipped Options+ agent (Hopper via REA, `otool`, embedded protobuf descriptors and the deobfuscated Electron bundle) and live HID++ traces. The notes are in [`re/notes/`](re/notes). No Logitech code or assets are included in this repository.
+No Logitech code or assets are included in this repository.
 
 ## Disclaimer
 
