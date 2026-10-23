@@ -77,6 +77,9 @@ func runDaemon(_ args: [String]) async throws {
         print("\((options.config ?? DaemonOptions.defaultConfig).path): ok")
         return
     }
+    // A control client that hangs up mid-reply must surface as a failed write, not kill the daemon with the
+    // wheel still diverted. SO_NOSIGPIPE on the socket alone didn't prevent it reliably.
+    signal(SIGPIPE, SIG_IGN)
     // FREESPIN_INSPECT_ONLY=1 (as in the app): read devices but never divert or switch them.
     let env = ProcessInfo.processInfo.environment
     let drive = env["FREESPIN_INSPECT_ONLY"] != "1"
@@ -99,6 +102,8 @@ func runDaemon(_ args: [String]) async throws {
 
     let flow = config.flow.enabled ? try makeFlow(config.flow, state: options.state, canSwitch: drive, name: env["FREESPIN_FLOW_NAME"]) : nil
     let control = flow.map { ControlServer(engine: $0.engine, socket: options.state.appendingPathComponent("control.sock")) }
+    // Fails when another daemon already runs on this state directory, before Flow reuses its identity.
+    try control?.start()
     if let flow {
         try flow.engine.start()
         let n = flow.engine.settings.peers.count
@@ -108,9 +113,6 @@ func runDaemon(_ args: [String]) async throws {
         flow?.sessionsChanged(sessions)
         let names = sessions.map(\.snapshot.name).filter { !$0.isEmpty }
         daemonLog("devices: \(names.isEmpty ? "none" : names.joined(separator: ", "))")
-    }
-    if let control {
-        do { try control.start() } catch { daemonLog("control socket: \(error)") }
     }
     if config.devices.values.contains(where: { $0.usesActionsRing }) || config.defaults.usesActionsRing {
         daemonLog("note: the Actions Ring needs the app; buttons set to actionsRing do nothing in the daemon")
@@ -128,8 +130,16 @@ func runDaemon(_ args: [String]) async throws {
             }
             store.replace(next)
             flow?.engine.updateSettings { next.flow.apply(to: &$0) }
-            for s in manager.allSessions { try? await s.reapply() }
-            daemonLog("config reloaded")
+            var failed: [String] = []
+            for s in manager.allSessions {
+                do {
+                    try await s.reapply()
+                } catch {
+                    daemonLog("reload: \(s.snapshot.name) kept its previous settings: \(error)")
+                    failed.append(s.snapshot.name)
+                }
+            }
+            daemonLog(failed.isEmpty ? "config reloaded" : "config reloaded, except on \(failed.joined(separator: ", "))")
         } catch {
             daemonLog("reload failed, keeping the previous config: \(error)")
         }

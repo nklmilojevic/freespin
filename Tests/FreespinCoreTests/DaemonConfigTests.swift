@@ -68,6 +68,19 @@ final class DaemonConfigTests: XCTestCase {
         XCTAssertEqual(s.effective(for: "com.apple.Terminal").scrollSpeedPercent, 50)
     }
 
+    func testDeviceAppEntryAddsToDefaultAppEntry() throws {
+        let config = try parse("""
+        {
+          "default": { "apps": { "com.apple.Safari": { "scrollSpeed": 25, "buttons": { "back": "missionControl" } } } },
+          "devices": { "MX Master 3S": { "apps": { "com.apple.Safari": { "buttons": { "middle": "appExpose" } } } } }
+        }
+        """)
+        let safari = config.settings(for: device(), base: DeviceSettings()).effective(for: "com.apple.Safari")
+        XCTAssertEqual(safari.scrollSpeed, -0.5, accuracy: 1e-9)
+        XCTAssertEqual(safari.action(for: 0x0053), .missionControl)
+        XCTAssertEqual(safari.action(for: 0x0052), .appExpose)
+    }
+
     func testFlowSection() throws {
         let config = try parse(#"{ "flow": { "enabled": true, "syncClipboard": false }, "notifications": false }"#)
         XCTAssertTrue(config.flow.enabled)

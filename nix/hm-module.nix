@@ -48,7 +48,16 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    assertions = [ (lib.hm.assertions.assertPlatform "services.freespin" pkgs lib.platforms.darwin) ];
+    assertions = [
+      (lib.hm.assertions.assertPlatform "services.freespin" pkgs lib.platforms.darwin)
+      {
+        assertion = !(cfg.package ? version) || lib.versionAtLeast cfg.package.version "0.3.0";
+        message = ''
+          services.freespin: freespinctl ${cfg.package.version or ""} has no `daemon` command; it arrives in 0.3.0.
+          Update the freespin flake input once that release is out, or set services.freespin.package.
+        '';
+      }
+    ];
 
     home.packages = [ cfg.package ];
 

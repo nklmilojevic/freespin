@@ -135,7 +135,7 @@ public struct DeviceConfig: Decodable, Sendable, Equatable {
         if let v = gestureStyle { s.trackpadSwipes = v == .trackpad }
         if let v = fnKeysFirst { s.fnKeysFirst = v }
         if let v = backlight { s.backlightEnabled = v }
-        for (bundle, app) in apps ?? [:] { s.apps[bundle] = app.override(name: bundle) }
+        for (bundle, app) in apps ?? [:] { app.apply(to: &s.apps[bundle, default: AppOverride(name: bundle)]) }
     }
 }
 
@@ -161,14 +161,13 @@ public struct AppConfig: Decodable, Sendable, Equatable {
         buttons = try c.decodeButtons(.buttons)
     }
 
-    func override(name: String) -> AppOverride {
-        var o = AppOverride(name: name)
-        o.scrollSpeed = scrollSpeed.map { Double($0) / 50 - 1 }
-        o.smoothScrolling = smoothScrolling
-        o.naturalDirection = naturalScrolling
-        o.thumbwheelSpeed = thumbwheelSpeed.map { Double($0) / 50 - 1 }
-        o.buttons = buttons ?? [:]
-        return o
+    /// Layers the fields this entry sets over `o`, so a device entry adds to what `default` set for the app.
+    func apply(to o: inout AppOverride) {
+        if let v = scrollSpeed { o.scrollSpeed = Double(v) / 50 - 1 }
+        if let v = smoothScrolling { o.smoothScrolling = v }
+        if let v = naturalScrolling { o.naturalDirection = v }
+        if let v = thumbwheelSpeed { o.thumbwheelSpeed = Double(v) / 50 - 1 }
+        for (k, v) in buttons ?? [:] { o.buttons[k] = v }
     }
 }
 
