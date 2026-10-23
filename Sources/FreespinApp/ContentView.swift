@@ -53,10 +53,44 @@ struct ContentView: View {
                 }
                 .help("Refresh battery and device state")
             }
+            ToolbarItem {
+                AppMenu()
+            }
         }
         .tint(.mauve)
         .sheet(isPresented: .constant(model.previewPairing != nil)) {
             if let (m, r) = model.previewPairing { PairingSheet(pairing: m, receiver: r) }
+        }
+    }
+}
+
+/// Freespin has no Dock icon or menu bar: app-level controls live here.
+struct AppMenu: View {
+    @State private var openAtLogin = LoginItem.isEnabled
+    @State private var loginError: String?
+
+    var body: some View {
+        Menu {
+            Toggle("Open at Login", isOn: Binding(get: { openAtLogin }, set: { on in
+                do {
+                    try LoginItem.set(on)
+                    openAtLogin = LoginItem.isEnabled
+                } catch {
+                    loginError = error.localizedDescription
+                }
+            }))
+            Divider()
+            Text("Closing this window keeps Freespin running.")
+            Button("Quit Freespin") { NSApp.terminate(nil) }
+                .keyboardShortcut("q")
+        } label: {
+            Label("Freespin", systemImage: "gearshape")
+        }
+        .help("Open at login, quit")
+        .alert("Couldn't change login item", isPresented: Binding(get: { loginError != nil }, set: { if !$0 { loginError = nil } })) {
+            Button("OK") { loginError = nil }
+        } message: {
+            Text(loginError ?? "")
         }
     }
 }
