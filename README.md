@@ -84,6 +84,61 @@ swift run freespinctl trace out.jsonl   # record wheel reports and scroll events
 swift run freespinctl run         # headless scroll engine
 ```
 
+## Running without the app
+
+`freespinctl daemon` does what the app does in the background, configured by a JSON file instead of the window. Use it as a LaunchAgent, for example from Nix. Don't run it alongside the app.
+
+```json
+{
+  "default": { "scrollSpeed": 60, "smoothScrolling": true },
+  "devices": {
+    "MX Master 3S": {
+      "dpi": 1600,
+      "smartShift": true,
+      "smartShiftSensitivity": 12,
+      "buttons": { "gesture": "gestures", "back": "missionControl" },
+      "apps": { "com.apple.Safari": { "scrollSpeed": 45 } }
+    }
+  },
+  "flow": { "enabled": true, "syncClipboard": true, "linkKeyboard": true },
+  "notifications": true
+}
+```
+
+- Settings a file leaves out keep the value the device already has. `default` applies to every device. Entries under `devices` match a device by name, product ID (`"b034"`) or device key (`"b034-FD094774-ff"`, as `freespinctl list` shows it), and the more specific entry wins.
+- Device keys: `scrollSpeed` and `thumbwheelSpeed` (0–100, 50 is the default), `smoothScrolling`, `naturalScrolling`, `thumbwheelNaturalScrolling`, `smartShift`, `smartShiftSensitivity` (1–50), `smartShiftTorque` (1–100), `dpi`, `gestureStyle` (`shortcuts` or `trackpad`), `fnKeysFirst`, `backlight`, `buttons` and `apps` (bundle ID to `scrollSpeed`, `smoothScrolling`, `naturalScrolling`, `thumbwheelSpeed`, `buttons`).
+- Buttons: `middle`, `back`, `forward`, `gesture`, `modeShift`, or a control ID such as `0x00c3`. Actions: `default`, `back`, `forward`, `middleClick`, `missionControl`, `appExpose`, `showDesktop`, `launchpad`, `desktopLeft`, `desktopRight`, `screenshot`, `gestures`. The Actions Ring needs the app.
+- Unknown keys and out-of-range values are errors. `freespinctl daemon --check --config <file>` validates a file. `SIGHUP` reloads it, and `SIGTERM` gives the wheel back to macOS.
+- The default config is `~/.config/freespin/config.json`. Flow's identity and paired computers live in `~/Library/Application Support/Freespin/daemon`, apart from the app's.
+
+Pair Flow computers through the running daemon:
+
+```fish
+freespinctl flow status                 # this computer and the ones it can see
+freespinctl flow pair studio            # compare the six-digit code, answer y
+freespinctl flow confirm                # on the other computer, when it started the pairing
+freespinctl flow side studio right      # where that computer sits
+```
+
+With home-manager, the flake provides a module that installs the signed release binary, writes the config and runs the LaunchAgent. A typo in `settings` fails `home-manager switch`:
+
+```nix
+{
+  inputs.freespin.url = "github:nklmilojevic/freespin";
+  # in your home-manager modules:
+  imports = [ inputs.freespin.homeManagerModules.default ];
+  services.freespin = {
+    enable = true;
+    settings = {
+      devices."MX Master 3S" = { dpi = 1600; buttons.gesture = "gestures"; };
+      flow.enabled = true;
+    };
+  };
+}
+```
+
+The agent runs a copy of the binary at `~/Library/Application Support/Freespin/bin/freespinctl`, so its Accessibility and Input Monitoring grants survive updates. On first start, grant both to that file. The daemon waits and starts once they're on. Logs go to `~/Library/Logs/freespin.log`.
+
 ## How it works
 
 ```
