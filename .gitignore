@@ -11,3 +11,4 @@ re/data/
 re/protos/
 PLAN.md
 dist/
+.DS_Store

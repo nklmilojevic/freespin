@@ -40,7 +40,7 @@ Memory is the physical footprint reported by `top`. Idle CPU is the process's CP
 - **Logi Bolt and Unifying receivers**: devices behind a receiver show up and disconnect live, and you can pair and unpair from the app. Bolt pairing uses the same two-button confirmation as Options+, one highlighted button at a time.
 - **Low-battery notifications** at 15 % and 5 %.
 - **Keyboard**: Fn-key inversion and backlight for Logitech keyboards that support them (implemented, not yet tested on hardware).
-- A regular windowed app. Closing the window keeps the mouse working; quitting gives the wheel back to macOS.
+- Runs in the background with no Dock icon. Closing the window keeps the mouse working, opening Freespin again brings the window back, and Quit (⌘Q or the gear menu) gives the wheel back to macOS. "Open at Login" starts it hidden.
 
 Not included: Flow, Smart Actions (macros), firmware updates, accounts, analytics, webcam and presenter features.
 
