@@ -136,11 +136,13 @@ public final class FlowEngine: @unchecked Sendable {
     /// Input arrived while a follow attempt was running: try once more when it finishes.
     private var followAgain = false
     private var watchingInput = false
-    /// Until then, pointer input still pushing through `followEdge` is the mouse that just left, not the user.
+    /// Until then, mouse motion still pushing through `followEdge` is the mouse that just left, not the user.
     private var followGraceUntil = Date.distantPast
     private var followEdge: FlowEdge?
     /// Consecutive reconnect attempts per paired host, for backoff.
     private var redials: [String: Int] = [:]
+    /// Paired hosts being dialed, by link: a dial that fails before the handshake never learns its peer.
+    private var dialing: [UUID: String] = [:]
 
     /// How long the receiver gets to place its cursor before the switch is abandoned.
     public var readyTimeout: TimeInterval = 0.8
@@ -151,6 +153,8 @@ public final class FlowEngine: @unchecked Sendable {
     public var followWindow: TimeInterval = 60
     /// First reconnect delay after a paired link drops; doubles per failed attempt, up to 30 s.
     public var redialDelay: TimeInterval = 1
+    /// After a flow out, mouse reports already in flight while the mouse disconnects arrive within this.
+    public var departGrace: TimeInterval = 0.15
 
     public init(identity: FlowIdentity, name: String, store: FlowSettingsStore, pointer: FlowPointer,
                 clipboard: FlowClipboard, bonjour: Bool = true) {
@@ -351,14 +355,17 @@ public final class FlowEngine: @unchecked Sendable {
 
     private func linkClosed(_ link: PeerLink) {
         links[link.id] = nil
+        let dialed = dialing.removeValue(forKey: link.id)
         if let id = link.peer?.hostID {
             if pairing?.hostID == id, anyLink(id) == nil {
                 pairing = nil
                 emit(.pairingCancelled(hostID: id))
             }
             emit(.linkDown(hostID: id))
-            // Bonjour results don't change when only the TCP link drops, so discovery won't redial it.
-            if started, store.settings.peer(id) != nil, anyLink(id) == nil { scheduleRedial(id) }
+        }
+        // Bonjour results don't change when only the TCP link drops (or a dial fails), so discovery won't redial.
+        if let id = link.peer?.hostID ?? dialed, started, store.settings.peer(id) != nil, !connectedOrDialing(id) {
+            scheduleRedial(id)
         }
         updatePointer()
         publish()
@@ -369,10 +376,19 @@ public final class FlowEngine: @unchecked Sendable {
         redials[hostID] = attempt + 1
         let delay = min(redialDelay * pow(2, Double(min(attempt, 5))), 30)
         queue.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, self.started, self.store.settings.peer(hostID) != nil, self.anyLink(hostID) == nil,
+            guard let self, self.started, self.store.settings.peer(hostID) != nil, !self.connectedOrDialing(hostID),
                   let host = self.discovered.first(where: { $0.hostID == hostID }) else { return }
-            _ = self.node.connect(to: host.endpoint)
+            self.dial(host)
         }
+    }
+
+    private func dial(_ host: DiscoveredHost) {
+        let link = node.connect(to: host.endpoint)
+        dialing[link.id] = host.hostID
+    }
+
+    private func connectedOrDialing(_ hostID: String) -> Bool {
+        anyLink(hostID) != nil || dialing.values.contains(hostID)
     }
 
     private func trustedLink(_ hostID: String) -> PeerLink? {
@@ -388,11 +404,11 @@ public final class FlowEngine: @unchecked Sendable {
     private func discoveredChanged(_ hosts: [DiscoveredHost]) {
         discovered = hosts
         // Dial paired computers we aren't connected to; the lower host ID dials first, the other after a delay.
-        for host in hosts where store.settings.peer(host.hostID) != nil && anyLink(host.hostID) == nil {
+        for host in hosts where store.settings.peer(host.hostID) != nil && !connectedOrDialing(host.hostID) {
             let delay: TimeInterval = node.identity.hostID < host.hostID ? 0 : 2
             queue.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self, self.started, self.anyLink(host.hostID) == nil else { return }
-                _ = self.node.connect(to: host.endpoint)
+                guard let self, self.started, !self.connectedOrDialing(host.hostID) else { return }
+                self.dial(host)
             }
         }
         publish()
@@ -571,7 +587,7 @@ public final class FlowEngine: @unchecked Sendable {
                     for k in s.localDevices where k.kind == .keyboard {
                         if let ch = paired.channel(for: k.unitID) { self.follow[k.unitID] = (ch, until) }
                     }
-                    self.followGraceUntil = Date().addingTimeInterval(self.cooldown)
+                    self.followGraceUntil = Date().addingTimeInterval(self.departGrace)
                     self.followEdge = edge
                     self.updateInputWatch()
                     self.queue.asyncAfter(deadline: .now() + self.followWindow) { self.followKeyboards() }

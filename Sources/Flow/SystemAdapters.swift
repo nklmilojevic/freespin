@@ -57,11 +57,18 @@ public final class SystemPointer: FlowPointer, @unchecked Sendable {
             let mask: NSEvent.EventTypeMask = [.keyDown, .flagsChanged, .mouseMoved, .leftMouseDown, .rightMouseDown,
                                                .otherMouseDown, .scrollWheel]
             let report: (NSEvent) -> Void = { [weak self] e in
-                if e.type == .keyDown || e.type == .flagsChanged { return handler(.key) }
-                let pushing = e.cgEvent.flatMap { cg in
-                    self?.geometry.hit(at: cg.location, delta: CGVector(dx: e.deltaX, dy: e.deltaY))?.edge
+                switch e.type {
+                case .keyDown, .flagsChanged:
+                    handler(.key)
+                case .mouseMoved where e.subtype != .touch:
+                    // Only plain mouse motion can be the mouse that just left; touch-subtype (trackpad) moves never are.
+                    let pushing = e.cgEvent.flatMap { cg in
+                        self?.geometry.hit(at: cg.location, delta: CGVector(dx: e.deltaX, dy: e.deltaY))?.edge
+                    }
+                    handler(.pointer(pushing: pushing))
+                default:
+                    handler(.pointer(pushing: nil))
                 }
-                handler(.pointer(pushing: pushing))
             }
             if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: report) {
                 self.inputMonitors.append(global)

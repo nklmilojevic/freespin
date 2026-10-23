@@ -53,6 +53,9 @@ public final class PeerLink: @unchecked Sendable {
                 self.receive()
             case let .waiting(error):
                 self.onLog?("waiting to connect to \(self.connection.endpoint): \(error)")
+                // A dial waits for a network change that may never come (e.g. connection refused); fail it so the
+                // engine's backoff retries instead.
+                if self.role == .initiator { self.close(error) }
             case let .failed(error):
                 self.onLog?("connection to \(self.connection.endpoint) failed: \(error)")
                 self.close(error)

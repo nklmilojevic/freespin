@@ -235,7 +235,7 @@ final class FlowEngineTests: XCTestCase {
         keyboard.failSwitch = true
         a.pointer.push(.right)
         waitUntil("flowed out") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
-        Thread.sleep(forTimeInterval: 0.3)
+        Thread.sleep(forTimeInterval: 0.2)  // past departGrace
         a.pointer.input(.pointer(pushing: .right))
         waitUntil("follow cancelled") { !a.pointer.isWatchingInput }
     }
@@ -354,6 +354,8 @@ final class FlowEngineTests: XCTestCase {
 
         b.engine.stop()
         waitUntil("A sees the link drop") { a.events.contains(.linkDown(hostID: b.hostID)) }
+        // Nothing listens for a while, so the first redials fail before any handshake.
+        Thread.sleep(forTimeInterval: 0.5)
         // Same computer back on the same address; Bonjour results never changed, so only a redial reconnects.
         b = try TestHost("B", identity: idB, dir: b.dir, port: port)
         hosts.append(b)
