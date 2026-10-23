@@ -20,7 +20,6 @@ usage: freespinctl <command>
   hosts                show Easy-Switch channels (0x1814) and unit IDs (0x0003) used by Flow (read-only)
   flow-sim [options]   headless Flow node with a simulated mouse (freespinctl flow-sim --help)
   daemon [options]     run headless from a config file, e.g. as a LaunchAgent (freespinctl daemon --help)
-  flow <command>       pair and arrange Flow computers through a running daemon (freespinctl flow --help)
 """
 
 let args = Array(CommandLine.arguments.dropFirst())
@@ -143,8 +142,6 @@ let task = Task {
         case "daemon":
             if args.contains("--help") { print(daemonUsage); exit(0) }
             try await runDaemon(Array(args.dropFirst()))
-        case "flow":
-            try await runFlowControl(Array(args.dropFirst()))
         case "run":
             guard ScrollEventPoster.hasPostPermission(prompt: true) else {
                 print("Accessibility permission is required to post scroll events.")

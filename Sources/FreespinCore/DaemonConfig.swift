@@ -10,14 +10,13 @@ import Foundation
 public struct FreespinConfig: Decodable, Sendable, Equatable {
     public var defaults = DeviceConfig()
     public var devices: [String: DeviceConfig] = [:]
-    public var flow = FlowConfig()
     /// Low-battery notifications.
     public var notifications = true
 
     public init() {}
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case defaults = "default", devices, flow, notifications
+        case defaults = "default", devices, notifications
     }
 
     public init(from decoder: Decoder) throws {
@@ -25,7 +24,6 @@ public struct FreespinConfig: Decodable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         defaults = try c.decodeIfPresent(DeviceConfig.self, forKey: .defaults) ?? DeviceConfig()
         devices = try c.decodeIfPresent([String: DeviceConfig].self, forKey: .devices) ?? [:]
-        flow = try c.decodeIfPresent(FlowConfig.self, forKey: .flow) ?? FlowConfig()
         notifications = try c.decodeIfPresent(Bool.self, forKey: .notifications) ?? true
     }
 
@@ -168,32 +166,6 @@ public struct AppConfig: Decodable, Sendable, Equatable {
         if let v = naturalScrolling { o.naturalDirection = v }
         if let v = thumbwheelSpeed { o.thumbwheelSpeed = Double(v) / 50 - 1 }
         for (k, v) in buttons ?? [:] { o.buttons[k] = v }
-    }
-}
-
-/// Flow tunables. Pairing and screen sides are state, kept by the daemon in its state directory.
-public struct FlowConfig: Decodable, Sendable, Equatable {
-    /// Off by default: no listener and no Bonjour unless asked for.
-    public var enabled = false
-    public var requireControl: Bool?
-    public var avoidCorners: Bool?
-    public var syncClipboard: Bool?
-    public var linkKeyboard: Bool?
-
-    public init() {}
-
-    enum CodingKeys: String, CodingKey, CaseIterable {
-        case enabled, requireControl, avoidCorners, syncClipboard, linkKeyboard
-    }
-
-    public init(from decoder: Decoder) throws {
-        try decoder.rejectUnknownKeys(CodingKeys.self)
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-        requireControl = try c.decodeIfPresent(Bool.self, forKey: .requireControl)
-        avoidCorners = try c.decodeIfPresent(Bool.self, forKey: .avoidCorners)
-        syncClipboard = try c.decodeIfPresent(Bool.self, forKey: .syncClipboard)
-        linkKeyboard = try c.decodeIfPresent(Bool.self, forKey: .linkKeyboard)
     }
 }
 

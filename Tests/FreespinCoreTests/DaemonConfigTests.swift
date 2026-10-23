@@ -18,7 +18,6 @@ final class DaemonConfigTests: XCTestCase {
         base.dpi = 1600
         base.smartShiftSensitivity = 22
         XCTAssertEqual(config.settings(for: device(), base: base), base)
-        XCTAssertFalse(config.flow.enabled)
         XCTAssertTrue(config.notifications)
     }
 
@@ -81,12 +80,8 @@ final class DaemonConfigTests: XCTestCase {
         XCTAssertEqual(safari.action(for: 0x0052), .appExpose)
     }
 
-    func testFlowSection() throws {
-        let config = try parse(#"{ "flow": { "enabled": true, "syncClipboard": false }, "notifications": false }"#)
-        XCTAssertTrue(config.flow.enabled)
-        XCTAssertEqual(config.flow.syncClipboard, false)
-        XCTAssertNil(config.flow.requireControl)
-        XCTAssertFalse(config.notifications)
+    func testNotificationsOff() throws {
+        XCTAssertFalse(try parse(#"{ "notifications": false }"#).notifications)
     }
 
     func testRejectsMistakes() {
@@ -96,7 +91,7 @@ final class DaemonConfigTests: XCTestCase {
             (#"{ "default": { "buttons": { "thumb": "back" } } }"#, "unknown button \"thumb\""),
             (#"{ "default": { "buttons": { "back": "launchpd" } } }"#, "unknown action \"launchpd\""),
             (#"{ "default": { "smoothScrolling": "yes" } }"#, "default.smoothScrolling: expected Bool"),
-            (#"{ "flow": { "enable": true } }"#, "flow.enable: unknown key"),
+            (#"{ "notification": false }"#, "notification: unknown key"),
             (#"{ "default": "#, "invalid JSON"),
         ]
         for (json, expected) in cases {

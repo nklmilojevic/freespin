@@ -27,7 +27,7 @@ stdenvNoCC.mkDerivation {
   '';
 
   meta = {
-    description = "Headless driver for Logitech HID++ mice: smooth scrolling, buttons, SmartShift and Flow";
+    description = "Headless driver for Logitech HID++ mice: smooth scrolling, buttons and SmartShift";
     homepage = "https://github.com/nklmilojevic/freespin";
     platforms = lib.platforms.darwin;
     mainProgram = "freespinctl";

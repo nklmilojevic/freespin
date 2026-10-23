@@ -15,7 +15,7 @@ arches=(--arch arm64 --arch x86_64)
 swift build -c release "${arches[@]}" --product FreespinApp
 
 # freespinctl carries an embedded Info.plist: when it runs as a LaunchAgent (`freespinctl daemon`) it is
-# its own app as far as TCC is concerned, so it needs a bundle identifier and the Local Network strings.
+# its own app as far as TCC is concerned, so it needs a bundle identifier.
 mkdir -p build
 cat > build/freespinctl-Info.plist <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -26,8 +26,6 @@ cat > build/freespinctl-Info.plist <<PLIST
     <key>CFBundleName</key><string>freespinctl</string>
     <key>CFBundleShortVersionString</key><string>${version}</string>
     <key>CFBundleVersion</key><string>${build_number}</string>
-    <key>NSLocalNetworkUsageDescription</key><string>Flow finds and connects to your other computers running Freespin on this network.</string>
-    <key>NSBonjourServices</key><array><string>_freespin-flow._tcp</string></array>
 </dict>
 </plist>
 PLIST

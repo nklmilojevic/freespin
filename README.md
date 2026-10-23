@@ -100,7 +100,6 @@ swift run freespinctl run         # headless scroll engine
       "apps": { "com.apple.Safari": { "scrollSpeed": 45 } }
     }
   },
-  "flow": { "enabled": true, "syncClipboard": true, "linkKeyboard": true },
   "notifications": true
 }
 ```
@@ -109,16 +108,7 @@ swift run freespinctl run         # headless scroll engine
 - Device keys: `scrollSpeed` and `thumbwheelSpeed` (0–100, 50 is the default), `smoothScrolling`, `naturalScrolling`, `thumbwheelNaturalScrolling`, `smartShift`, `smartShiftSensitivity` (1–50), `smartShiftTorque` (1–100), `dpi`, `gestureStyle` (`shortcuts` or `trackpad`), `fnKeysFirst`, `backlight`, `buttons` and `apps` (bundle ID to `scrollSpeed`, `smoothScrolling`, `naturalScrolling`, `thumbwheelSpeed`, `buttons`).
 - Buttons: `middle`, `back`, `forward`, `gesture`, `modeShift`, or a control ID such as `0x00c3`. Actions: `default`, `back`, `forward`, `middleClick`, `missionControl`, `appExpose`, `showDesktop`, `launchpad`, `desktopLeft`, `desktopRight`, `screenshot`, `gestures`. The Actions Ring needs the app.
 - Unknown keys and out-of-range values are errors. `freespinctl daemon --check --config <file>` validates a file. `SIGHUP` reloads it, and `SIGTERM` gives the wheel back to macOS.
-- The default config is `~/.config/freespin/config.json`. Flow's identity and paired computers live in `~/Library/Application Support/Freespin/daemon`, apart from the app's.
-
-Pair Flow computers through the running daemon:
-
-```fish
-freespinctl flow status                 # this computer and the ones it can see
-freespinctl flow pair studio            # compare the six-digit code, answer y
-freespinctl flow confirm                # on the other computer, when it started the pairing
-freespinctl flow side studio right      # where that computer sits
-```
+- The default config is `~/.config/freespin/config.json`. Flow is app-only for now.
 
 With home-manager, the flake provides a module that installs the signed release binary, writes the config and runs the LaunchAgent. A typo in `settings` fails `home-manager switch`:
 
@@ -131,7 +121,6 @@ With home-manager, the flake provides a module that installs the signed release 
     enable = true;
     settings = {
       devices."MX Master 3S" = { dpi = 1600; buttons.gesture = "gestures"; };
-      flow.enabled = true;
     };
   };
 }

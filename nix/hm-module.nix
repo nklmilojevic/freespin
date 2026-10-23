@@ -41,7 +41,6 @@ in
             buttons = { gesture = "gestures"; back = "missionControl"; };
             apps."com.apple.Safari".scrollSpeed = 45;
           };
-          flow = { enabled = true; syncClipboard = true; };
         }
       '';
     };
