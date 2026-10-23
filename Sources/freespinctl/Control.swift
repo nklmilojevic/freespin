@@ -2,7 +2,14 @@ import Flow
 import Foundation
 import FreespinCore
 
-/// What `freespinctl flow` asks the daemon over its control socket: one request line in, one JSON reply out.
+/// What `freespinctl flow` asks the daemon over its control socket: one JSON request line in, one JSON reply out.
+struct ControlRequest: Codable {
+    var command: String
+    /// Computer name (may contain spaces), host ID or unique host ID prefix.
+    var host: String?
+    var edge: String?
+}
+
 struct ControlReply: Codable {
     struct Host: Codable {
         var hostID: String
@@ -44,6 +51,8 @@ final class ControlServer: @unchecked Sendable {
     private var latest = FlowStatus()
     private var fd: Int32 = -1
     private var source: DispatchSourceRead?
+    /// The socket file this server created, so `stop` never removes another daemon's.
+    private var bound: (dev: dev_t, ino: ino_t)?
 
     /// Call before `engine.start()` so the first status isn't missed.
     init(engine: FlowEngine, socket: URL) {
@@ -55,7 +64,12 @@ final class ControlServer: @unchecked Sendable {
     func start() throws {
         let dir = (path as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        unlink(path)
+        if FileManager.default.fileExists(atPath: path) {
+            guard !acceptsConnections(path) else {
+                throw ConfigError(message: "another freespinctl daemon is already using \(dir)")
+            }
+            unlink(path)  // left behind by a daemon that didn't stop cleanly
+        }
         fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw posixError("socket") }
         var addr = try unixAddress(path)
@@ -64,7 +78,9 @@ final class ControlServer: @unchecked Sendable {
         }
         guard bound == 0 else { throw posixError("bind \(path)") }
         chmod(path, 0o600)
-        guard listen(fd, 4) == 0 else { throw posixError("listen") }
+        var st = stat()
+        if stat(path, &st) == 0 { self.bound = (st.st_dev, st.st_ino) }
+        guard listen(fd, 16) == 0 else { throw posixError("listen") }
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         source.setEventHandler { [weak self] in self?.acceptOne() }
         source.resume()
@@ -76,7 +92,9 @@ final class ControlServer: @unchecked Sendable {
         source = nil
         if fd >= 0 { close(fd) }
         fd = -1
-        unlink(path)
+        var st = stat()
+        if let bound, stat(path, &st) == 0, st.st_dev == bound.dev, st.st_ino == bound.ino { unlink(path) }
+        bound = nil
     }
 
     private func acceptOne() {
@@ -88,17 +106,18 @@ final class ControlServer: @unchecked Sendable {
         var timeout = timeval(tv_sec: 2, tv_usec: 0)
         setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         guard let line = readLine(client) else { return }
-        var data = (try? JSONEncoder().encode(handle(line))) ?? Data()
+        let reply = (try? JSONDecoder().decode(ControlRequest.self, from: Data(line.utf8))).map(handle)
+            ?? ControlReply(error: "malformed request")
+        var data = (try? JSONEncoder().encode(reply)) ?? Data()
         data.append(0x0A)
-        _ = data.withUnsafeBytes { write(client, $0.baseAddress, $0.count) }
+        // A client that hung up must not take the daemon down with SIGPIPE.
+        writeAll(client, data)
     }
 
-    func handle(_ line: String) -> ControlReply {
-        let words = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-        guard let command = words.first else { return ControlReply(error: "empty request") }
-        let arg = words.dropFirst().first
+    func handle(_ request: ControlRequest) -> ControlReply {
+        let arg = request.host
         let status = lock.withLock { latest }
-        switch command {
+        switch request.command {
         case "status":
             return ControlReply(status: reply(status))
         case "pair":
@@ -120,12 +139,12 @@ final class ControlServer: @unchecked Sendable {
             guard let host = resolve(arg, in: engine.settings.peers.map { ($0.hostID, $0.name) }) else {
                 return ControlReply(error: "not paired with \(arg ?? "?")")
             }
-            guard let edge = words.dropFirst(2).first.flatMap(FlowEdge.init(rawValue:)) else {
+            guard let edge = request.edge.flatMap(FlowEdge.init(rawValue:)) else {
                 return ControlReply(error: "side must be one of: \(FlowEdge.allCases.map(\.rawValue).joined(separator: ", "))")
             }
             engine.setSide(edge, for: host)
         default:
-            return ControlReply(error: "unknown request \(command)")
+            return ControlReply(error: "unknown request \(request.command)")
         }
         return ControlReply()
     }
@@ -166,6 +185,45 @@ private func readLine(_ fd: Int32) -> String? {
     }
     guard let text = String(data: data, encoding: .utf8) else { return nil }
     return text.split(separator: "\n").first.map { $0.trimmingCharacters(in: .whitespaces) }
+}
+
+/// Writes everything, on a socket that reports a closed peer as an error instead of raising SIGPIPE.
+@discardableResult
+private func writeAll(_ fd: Int32, _ data: Data) -> Bool {
+    var on: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+    return data.withUnsafeBytes { buf in
+        var offset = 0
+        while offset < buf.count {
+            let n = write(fd, buf.baseAddress! + offset, buf.count - offset)
+            if n < 0, errno == EINTR { continue }
+            guard n > 0 else { return false }
+            offset += n
+        }
+        return true
+    }
+}
+
+/// A connected socket to `path`; throws when nothing listens there.
+private func connectUnix(_ path: String) throws -> Int32 {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { throw posixError("socket") }
+    var addr = try unixAddress(path)
+    let connected = withUnsafePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+    }
+    guard connected == 0 else {
+        let error = posixError("connect")
+        close(fd)
+        throw error
+    }
+    return fd
+}
+
+private func acceptsConnections(_ path: String) -> Bool {
+    guard let fd = try? connectUnix(path) else { return false }
+    close(fd)
+    return true
 }
 
 private func unixAddress(_ path: String) throws -> sockaddr_un {
@@ -220,15 +278,24 @@ func runFlowControl(_ args: [String]) async throws {
         guard let s = try client.send("status").status else { return }
         printStatus(s)
     case "pair":
-        guard words.count == 2 else { throw ConfigError(message: "usage: freespinctl flow pair <computer>") }
-        try await pairInteractively(words[1], client: client)
+        // Unquoted multi-word names work too: `flow pair MacBook Pro`.
+        guard words.count >= 2 else { throw ConfigError(message: "usage: freespinctl flow pair <computer>") }
+        try await pairInteractively(words.dropFirst().joined(separator: " "), client: client)
     case "confirm":
         guard let p = try client.send("status").status?.pairing else { throw ConfigError(message: "no pairing in progress") }
         try client.send("confirm")
         print("confirmed code \(p.code) with \(p.name); waiting for it to confirm too")
         try await waitForPairing(p.hostID, client: client)
-    case "cancel", "unpair", "side":
-        try client.send(words.joined(separator: " "))
+    case "cancel":
+        try client.send("cancel")
+        print("ok")
+    case "unpair":
+        guard words.count >= 2 else { throw ConfigError(message: "usage: freespinctl flow unpair <computer>") }
+        try client.send("unpair", host: words.dropFirst().joined(separator: " "))
+        print("ok")
+    case "side":
+        guard words.count >= 3 else { throw ConfigError(message: "usage: freespinctl flow side <computer> <left|right|top|bottom>") }
+        try client.send("side", host: words.dropFirst().dropLast().joined(separator: " "), edge: words.last)
         print("ok")
     default:
         print(flowUsage)
@@ -251,7 +318,7 @@ private func printStatus(_ s: ControlReply.Status) {
 }
 
 private func pairInteractively(_ host: String, client: ControlClient) async throws {
-    try client.send("pair \(host)")
+    try client.send("pair", host: host)
     var pairing: ControlReply.Pairing?
     for _ in 0..<120 {
         pairing = try client.send("status").status?.pairing
@@ -289,19 +356,17 @@ struct ControlClient {
     let socketURL: URL
 
     @discardableResult
-    func send(_ request: String) throws -> ControlReply {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw posixError("socket") }
+    func send(_ command: String, host: String? = nil, edge: String? = nil) throws -> ControlReply {
+        let fd: Int32
+        do {
+            fd = try connectUnix(socketURL.path)
+        } catch {
+            throw ConfigError(message: "no daemon with Flow enabled at \(socketURL.path) (\(error))")
+        }
         defer { close(fd) }
-        var addr = try unixAddress(socketURL.path)
-        let connected = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
-        }
-        guard connected == 0 else {
-            throw ConfigError(message: "no daemon with Flow enabled at \(socketURL.path) (\(String(cString: strerror(errno))))")
-        }
-        let data = Data((request + "\n").utf8)
-        _ = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        var data = try JSONEncoder().encode(ControlRequest(command: command, host: host, edge: edge))
+        data.append(0x0A)
+        guard writeAll(fd, data) else { throw ConfigError(message: "the daemon closed the connection") }
         var timeout = timeval(tv_sec: 5, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         guard let line = readLine(fd), let reply = try? JSONDecoder().decode(ControlReply.self, from: Data(line.utf8)) else {
