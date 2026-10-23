@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & test
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ hashFiles('Sources/**/*.swift') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
+            spm-${{ runner.os }}-
+
+      - name: Build
+        run: swift build -c release
+
+      - name: Test
+        run: swift test --parallel
+
+      - name: Bundle Freespin.app (ad-hoc signed)
+        run: ./scripts/build-app.sh
+
+      - name: Package
+        run: |
+          ditto -c -k --keepParent build/Freespin.app build/Freespin.zip
+          cp "$(swift build -c release --show-bin-path)/freespinctl" build/freespinctl
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Freespin-${{ github.sha }}
+          path: |
+            build/Freespin.zip
+            build/freespinctl
+          if-no-files-found: error
+          retention-days: 14
