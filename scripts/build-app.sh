@@ -13,7 +13,26 @@ identity=${SIGN_IDENTITY:--}
 
 arches=(--arch arm64 --arch x86_64)
 swift build -c release "${arches[@]}" --product FreespinApp
-swift build -c release "${arches[@]}" --product freespinctl
+
+# freespinctl carries an embedded Info.plist: when it runs as a LaunchAgent (`freespinctl daemon`) it is
+# its own app as far as TCC is concerned, so it needs a bundle identifier and the Local Network strings.
+mkdir -p build
+cat > build/freespinctl-Info.plist <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>dev.nkl.freespin.ctl</string>
+    <key>CFBundleName</key><string>freespinctl</string>
+    <key>CFBundleShortVersionString</key><string>${version}</string>
+    <key>CFBundleVersion</key><string>${build_number}</string>
+    <key>NSLocalNetworkUsageDescription</key><string>Flow finds and connects to your other computers running Freespin on this network.</string>
+    <key>NSBonjourServices</key><array><string>_freespin-flow._tcp</string></array>
+</dict>
+</plist>
+PLIST
+swift build -c release "${arches[@]}" --product freespinctl \
+  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$PWD/build/freespinctl-Info.plist"
 products=$(swift build -c release "${arches[@]}" --show-bin-path)
 
 [ -f Resources/AppIcon.icns ] || swift scripts/make-icon.swift
@@ -50,7 +69,7 @@ PLIST
 # Ad-hoc signature unless SIGN_IDENTITY is set; a real identity gets a secure timestamp so it can be notarized.
 timestamp=--timestamp=none
 [ "$identity" != "-" ] && timestamp=--timestamp
-codesign --force --options runtime "$timestamp" --sign "$identity" build/freespinctl
+codesign --force --options runtime "$timestamp" --identifier dev.nkl.freespin.ctl --sign "$identity" build/freespinctl
 codesign --force --options runtime "$timestamp" --sign "$identity" "$app"
 codesign --verify "$app"
 echo "Built $app and build/freespinctl (version $version)"

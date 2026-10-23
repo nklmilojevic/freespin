@@ -92,8 +92,16 @@ public struct AppOverride: Codable, Sendable, Equatable {
     public init(name: String) { self.name = name }
 }
 
+/// Where a session reads its settings from: the app's editable `SettingsStore`, or the daemon's
+/// read-only `ConfigSettingsStore`.
+public protocol DeviceSettingsStore: AnyObject, Sendable {
+    func hasSettings(for device: DeviceSnapshot) -> Bool
+    func settings(for device: DeviceSnapshot) -> DeviceSettings
+    func update(_ device: DeviceSnapshot, _ body: (inout DeviceSettings) -> Void)
+}
+
 /// JSON store in ~/Library/Application Support/Freespin/settings.json keyed by a stable device key.
-public final class SettingsStore: @unchecked Sendable {
+public final class SettingsStore: DeviceSettingsStore, @unchecked Sendable {
     public static let shared = SettingsStore()
 
     private struct File: Codable {
@@ -132,6 +140,12 @@ public final class SettingsStore: @unchecked Sendable {
     public func settings(for key: String) -> DeviceSettings {
         lock.withLock { file.devices[key] ?? DeviceSettings() }
     }
+
+    public func hasSettings(for device: DeviceSnapshot) -> Bool { hasSettings(for: device.id) }
+
+    public func settings(for device: DeviceSnapshot) -> DeviceSettings { settings(for: device.id) }
+
+    public func update(_ device: DeviceSnapshot, _ body: (inout DeviceSettings) -> Void) { update(device.id, body) }
 
     public func update(_ key: String, _ body: (inout DeviceSettings) -> Void) {
         let snapshot: File = lock.withLock {
