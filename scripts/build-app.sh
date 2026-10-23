@@ -1,45 +1,51 @@
 #!/usr/bin/env bash
-# Builds build/Freespin.app from the SwiftPM FreespinApp target.
+# Builds universal release binaries and wraps FreespinApp in build/Freespin.app; also builds build/freespinctl.
+# Version comes from $VERSION, else the latest git tag, else 0.0.0-dev.
 # SIGN_IDENTITY: codesign identity (default "-" = ad-hoc). A stable identity keeps
 # Accessibility / Input Monitoring grants across rebuilds.
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG="${CONFIG:-release}"
-IDENTITY="${SIGN_IDENTITY:--}"
-APP="$ROOT/build/Freespin.app"
-VERSION="${VERSION:-0.1.0}"
+version=${VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0-dev)}
+version=${version#v}
+build_number=$(git rev-list --count HEAD 2>/dev/null || echo 1)
+identity=${SIGN_IDENTITY:--}
 
-swift build --package-path "$ROOT" -c "$CONFIG" --product FreespinApp
-BIN="$(swift build --package-path "$ROOT" -c "$CONFIG" --show-bin-path)/FreespinApp"
+arches=(--arch arm64 --arch x86_64)
+swift build -c release "${arches[@]}" --product FreespinApp
+swift build -c release "${arches[@]}" --product freespinctl
+products=$(swift build -c release "${arches[@]}" --show-bin-path)
 
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/Freespin"
-[ -f "$ROOT/Resources/AppIcon.icns" ] || (cd "$ROOT" && swift scripts/make-icon.swift)
-cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+[ -f Resources/AppIcon.icns ] || swift scripts/make-icon.swift
 
-cat > "$APP/Contents/Info.plist" <<PLIST
+app=build/Freespin.app
+rm -rf "$app"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+cp "$products/FreespinApp" "$app/Contents/MacOS/Freespin"
+cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
+cp "$products/freespinctl" build/freespinctl
+cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleExecutable</key><string>Freespin</string>
-  <key>CFBundleIdentifier</key><string>dev.nkl.freespin</string>
-  <key>CFBundleName</key><string>Freespin</string>
-  <key>CFBundleDisplayName</key><string>Freespin</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>$VERSION</string>
-  <key>CFBundleVersion</key><string>$VERSION</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
-  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
-  <key>NSHighResolutionCapable</key><true/>
-  <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>CFBundleExecutable</key><string>Freespin</string>
+    <key>CFBundleIdentifier</key><string>dev.nkl.freespin</string>
+    <key>CFBundleName</key><string>Freespin</string>
+    <key>CFBundleDisplayName</key><string>Freespin</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>${version}</string>
+    <key>CFBundleVersion</key><string>${build_number}</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
 </plist>
 PLIST
-
-codesign --force --options runtime --timestamp=none --sign "$IDENTITY" "$APP"
-codesign --verify --verbose=1 "$APP"
-echo "built $APP"
+# Ad-hoc signature unless SIGN_IDENTITY is set: release builds are not notarized.
+codesign --force --sign "$identity" build/freespinctl
+codesign --force --options runtime --timestamp=none --sign "$identity" "$app"
+codesign --verify "$app"
+echo "Built $app and build/freespinctl (version $version)"

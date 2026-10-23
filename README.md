@@ -54,8 +54,9 @@ Requires Xcode 16+ (Swift 6 toolchain) and macOS 14+.
 
 ```fish
 swift test                                # unit tests
-./scripts/build-app.sh                    # → build/Freespin.app (ad-hoc signed)
+./scripts/build-app.sh                    # → build/Freespin.app + build/freespinctl (universal, ad-hoc signed)
 SIGN_IDENTITY="Developer ID Application: …" ./scripts/build-app.sh   # stable identity keeps permissions across rebuilds
+./scripts/dmg.sh                          # → dist/Freespin-<version>.dmg, freespinctl tarball, SHA256SUMS
 open build/Freespin.app
 ```
 
