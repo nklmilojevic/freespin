@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.3.0 - 2026-10-23
+
+This release adds Flow, which moves your mouse between Macs. It also adds a headless daemon, automatic updates, and signed releases.
+
+### New features
+
+- Add Flow. When you push the pointer past a screen edge, the Easy-Switch mouse moves to the other Mac. Linked Logitech keyboards and the clipboard follow. Flow works on the local network only. Pair two Macs with a six-digit code.
+- Add a sleeping keyboard follow. A keyboard that is asleep when the mouse leaves now follows the mouse when it wakes.
+- Add `freespinctl hosts` to show the host channels of your devices. Add `freespinctl flow-sim` to test Flow without real devices.
+- Add `freespinctl daemon`. It runs Freespin in the background and reads a JSON config file. It reloads the config on `SIGHUP` and gives the wheel back to macOS on `SIGTERM`.
+- Add a Nix flake and a home-manager module. The module checks your config when it builds.
+- Add automatic updates with Sparkle. Use the gear menu to check for updates or to turn on automatic checks.
+- Add signed and notarized releases, so macOS accepts the app and the CLI.
+
+### Fixes
+
+- Fix the keyboard follow. The keyboard stays on this Mac when you use the pointer here, or when you switch the mouse back with its Easy-Switch button.
+- Fix Flow reconnection. Flow now tries again to connect to a paired Mac when the link drops or a connection attempt fails.
+- Fix the clipboard. An empty clipboard now carries over, so the other Mac does not paste old data.
+- Fix the Flow sidebar. The Computers section works on a Mac that has no Logitech devices.
+- Fix the daemon config. A device entry now adds to the per-app settings from `default` and does not replace them.
+- Fix the daemon control and shutdown. A second daemon cannot start on the same state directory. The daemon handles `SIGTERM` and `SIGINT` while it waits for permissions.
+- Fix a failed wheel-mode write. The daemon now tries again on the next apply or reload.
+- Fix `freespinctl list`. It now prints the key of each device.
+
+### Other changes
+
+- Remove the reverse-engineering wording from the README.
+
 ## v0.2.0 - 2026-10-23
 
 This release lets Freespin run in the background without a Dock icon. You can close the window and the app keeps control of the mouse.
