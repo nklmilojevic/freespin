@@ -38,14 +38,17 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key><string>${version}</string>
     <key>CFBundleVersion</key><string>${build_number}</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSUIElement</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
 </plist>
 PLIST
-# Ad-hoc signature unless SIGN_IDENTITY is set: release builds are not notarized.
-codesign --force --sign "$identity" build/freespinctl
-codesign --force --options runtime --timestamp=none --sign "$identity" "$app"
+# Ad-hoc signature unless SIGN_IDENTITY is set; a real identity gets a secure timestamp so it can be notarized.
+timestamp=--timestamp=none
+[ "$identity" != "-" ] && timestamp=--timestamp
+codesign --force --options runtime "$timestamp" --sign "$identity" build/freespinctl
+codesign --force --options runtime "$timestamp" --sign "$identity" "$app"
 codesign --verify "$app"
 echo "Built $app and build/freespinctl (version $version)"
