@@ -67,7 +67,9 @@ func runDaemon(_ args: [String]) async throws {
     // FREESPIN_INSPECT_ONLY=1 (as in the app): read devices but never divert them.
     let drive = ProcessInfo.processInfo.environment["FREESPIN_INSPECT_ONLY"] != "1"
     daemonLog("freespin daemon starting (config \((options.config ?? DaemonOptions.defaultConfig).path)\(drive ? "" : ", inspect only"))")
-    if drive { await waitForPermissions() }
+    // Catch signals first, so a stop while waiting for permissions or after the wheel is diverted always goes
+    // through the shutdown below.
+    let stopOrReload = signals([SIGTERM, SIGINT, SIGHUP])
 
     let store = ConfigSettingsStore(config: config)
     let manager = DeviceManager(store: store, drive: drive)
@@ -84,31 +86,58 @@ func runDaemon(_ args: [String]) async throws {
     if config.devices.values.contains(where: { $0.usesActionsRing }) || config.defaults.usesActionsRing {
         daemonLog("note: the Actions Ring needs the app; buttons set to actionsRing do nothing in the daemon")
     }
-    // Catch signals before the wheel is diverted so a stop always gives it back.
-    let stopOrReload = signals([SIGTERM, SIGINT, SIGHUP])
-    try manager.start()
-
-    for await sig in stopOrReload {
-        guard sig == SIGHUP else { break }
+    // Devices are taken over once permissions are granted; a stop before that cancels the wait.
+    let starting = Task {
+        if drive, !(await waitForPermissions()) { return }
         do {
-            store.replace(try options.loadConfig())
-            var failed: [String] = []
-            for s in manager.allSessions {
-                do {
-                    try await s.reapply()
-                } catch {
-                    daemonLog("reload: \(s.snapshot.name) kept its previous settings: \(error)")
-                    failed.append(s.snapshot.name)
-                }
-            }
-            daemonLog(failed.isEmpty ? "config reloaded" : "config reloaded, except on \(failed.joined(separator: ", "))")
+            try manager.start()
         } catch {
-            daemonLog("reload failed, keeping the previous config: \(error)")
+            daemonLog("cannot start: \(error)")
+            exit(1)
         }
     }
 
+    for await sig in stopOrReload {
+        guard sig == SIGHUP else { break }
+        await reload(options, store: store, manager: manager)
+    }
+
+    starting.cancel()
+    await starting.value
     daemonLog("stopping; restoring native scrolling")
     await manager.stopAll()
+}
+
+/// Applies a reloaded config to every device. A device that rejects a write stays on its previous settings
+/// and its session retries on the next apply; here it gets a few more tries before that.
+private func reload(_ options: DaemonOptions, store: ConfigSettingsStore, manager: DeviceManager) async {
+    do {
+        store.replace(try options.loadConfig())
+    } catch {
+        daemonLog("reload failed, keeping the previous config: \(error)")
+        return
+    }
+    var pending = manager.allSessions
+    for attempt in 1...3 {
+        var failed: [(DeviceSession, Error)] = []
+        for s in pending {
+            do { try await s.reapply() } catch { failed.append((s, error)) }
+        }
+        if failed.isEmpty {
+            daemonLog("config reloaded")
+            return
+        }
+        if attempt == 3 {
+            for (s, error) in failed {
+                daemonLog("reload: \(s.snapshot.name) is still on its previous settings (\(error)); "
+                    + "it tries again on the next app switch, reconnect or reload")
+            }
+            daemonLog("config reloaded, except on \(failed.map(\.0.snapshot.name).joined(separator: ", "))")
+            return
+        }
+        pending = failed.map(\.0)
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+    }
 }
 
 extension DeviceConfig {
@@ -120,20 +149,22 @@ extension DeviceConfig {
 
 /// Blocks until Accessibility (posting scroll and key events) and Input Monitoring (reading the mouse) are
 /// granted, prompting once. Both are checked live, so granting them in System Settings needs no restart.
-private func waitForPermissions() async {
+/// Returns false when the task is cancelled first.
+private func waitForPermissions() async -> Bool {
     var prompted = false
-    while true {
+    while !Task.isCancelled {
         let accessibility = ScrollEventPoster.hasPostPermission(prompt: !prompted)
         let input = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
         if !input, !prompted { _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) }
-        if accessibility, input { return }
+        if accessibility, input { return true }
         if !prompted {
             let missing = [accessibility ? nil : "Accessibility", input ? nil : "Input Monitoring"].compactMap { $0 }
             daemonLog("waiting for \(missing.joined(separator: " and ")) permission for \(CommandLine.arguments[0])")
         }
         prompted = true
-        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return false }
     }
+    return false
 }
 
 /// Notification Center needs an app bundle, so the daemon goes through osascript.

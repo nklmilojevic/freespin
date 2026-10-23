@@ -60,7 +60,7 @@ let task = Task {
             if sessions.isEmpty { print("no HID++ devices found") }
             for s in sessions {
                 let snap = s.snapshot
-                var line = "\(snap.name)  pid=\(String(format: "%04x", snap.productID))  \(snap.transport)  idx=\(snap.deviceIndex)"
+                var line = "\(snap.name)  key=\(snap.id)  pid=\(String(format: "%04x", snap.productID))  \(snap.transport)  idx=\(snap.deviceIndex)"
                 if let b = snap.battery { line += "  battery=\(b.percent.map { "\($0)%" } ?? b.level) \(b.charging)" }
                 if let d = snap.dpi { line += "  dpi=\(d)" }
                 print(line)

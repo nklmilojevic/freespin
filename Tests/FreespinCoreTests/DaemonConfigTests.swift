@@ -92,6 +92,10 @@ final class DaemonConfigTests: XCTestCase {
             (#"{ "default": { "buttons": { "back": "launchpd" } } }"#, "unknown action \"launchpd\""),
             (#"{ "default": { "smoothScrolling": "yes" } }"#, "default.smoothScrolling: expected Bool"),
             (#"{ "notification": false }"#, "notification: unknown key"),
+            (#"{ "devices": { "b034": { "dpi": 800 }, "0xB034": { "dpi": 1600 } } }"#,
+             #"devices: "0xB034" and "b034" select the same devices"#),
+            (#"{ "devices": { "MX Master 3S": { "dpi": 800 }, "mx master 3s": { "dpi": 1600 } } }"#,
+             #"devices: "MX Master 3S" and "mx master 3s" select the same devices"#),
             (#"{ "default": "#, "invalid JSON"),
         ]
         for (json, expected) in cases {

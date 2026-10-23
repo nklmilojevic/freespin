@@ -203,8 +203,7 @@ public final class DeviceSession: @unchecked Sendable {
     /// Mirrors `devio_feature_2121_gesture::_set_parameters`: diverted = smooth, highRes = smooth.
     private var lastApplied: DeviceSettings?
 
-    /// Pushes settings to the engine immediately and to the device only for fields that changed.
-    public func apply(_ s: DeviceSettings) async throws {
+    private func setEngine(_ s: DeviceSettings) {
         let multiplier = Int(snapshot.wheel?.multiplier ?? 1)
         queue.sync {
             processor.settings = s.wheelSettings
@@ -216,12 +215,23 @@ public final class DeviceSession: @unchecked Sendable {
             thumbProcessor.settings = thumb
             thumbProcessor.deviceMultiplier = snapshot.thumbwheel?.multiplier ?? 1
         }
+    }
+
+    /// Pushes settings to the engine immediately and to the device only for fields that changed.
+    public func apply(_ s: DeviceSettings) async throws {
         let previous = lastApplied
-        lastApplied = s
+        setEngine(s)
         if snapshot.has(.hiResWheel), previous?.smoothScrolling != s.smoothScrolling {
             let mode = WheelMode(diverted: s.smoothScrolling, highResolution: s.smoothScrolling, inverted: false)
-            _ = try await device.setWheelMode(mode)
+            do {
+                _ = try await device.setWheelMode(mode)
+            } catch {
+                // The device kept its old mode: so does the engine, and the next apply retries the write.
+                if let previous { setEngine(previous) }
+                throw error
+            }
         }
+        lastApplied = s
         if let current = snapshot.smartShift,
            previous == nil || previous?.smartShiftEnabled != s.smartShiftEnabled
             || previous?.smartShiftSensitivity != s.smartShiftSensitivity || previous?.smartShiftTorque != s.smartShiftTorque {

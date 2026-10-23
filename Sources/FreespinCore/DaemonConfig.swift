@@ -24,6 +24,17 @@ public struct FreespinConfig: Decodable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         defaults = try c.decodeIfPresent(DeviceConfig.self, forKey: .defaults) ?? DeviceConfig()
         devices = try c.decodeIfPresent([String: DeviceConfig].self, forKey: .devices) ?? [:]
+        // Two selectors for the same thing ("b034" and "0xB034", or names differing in case) would layer in
+        // dictionary order, so the result would be arbitrary.
+        var seen: [String: String] = [:]
+        for key in devices.keys.sorted() {
+            let normalized = Self.productID(key).map { "product \($0)" } ?? key.lowercased()
+            if let other = seen[normalized] {
+                throw DecodingError.dataCorrupted(.init(codingPath: [CodingKeys.devices],
+                                                        debugDescription: "\"\(other)\" and \"\(key)\" select the same devices"))
+            }
+            seen[normalized] = key
+        }
         notifications = try c.decodeIfPresent(Bool.self, forKey: .notifications) ?? true
     }
 
