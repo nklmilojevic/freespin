@@ -1,0 +1,22 @@
+{
+  "name": "webcrack",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "overrides": {
+    "isolated-vm": "^7"
+  },
+  "dependencies": {
+    "webcrack": "^2.15.1"
+  },
+  "allowScripts": {
+    "isolated-vm@7.0.1": true
+  }
+}

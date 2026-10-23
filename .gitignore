@@ -1,0 +1,12 @@
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+build/
+re/bin/
+re/asar/
+re/decomp/
+re/tools/webcrack/node_modules/
+re/data/
+re/protos/
+PLAN.md
