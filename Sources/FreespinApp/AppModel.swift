@@ -16,6 +16,8 @@ struct DeviceItem: Identifiable, Equatable {
 @Observable
 final class AppModel {
     var devices: [DeviceItem] = []
+    var receivers: [ReceiverSnapshot] = []
+    var pairing: [String: PairingModel] = [:]
     var selection: String?
     var log: [String] = []
     var accessibilityGranted = ScrollEventPoster.hasPostPermission()
@@ -33,8 +35,15 @@ final class AppModel {
     func start() {
         guard !started else { return }
         started = true
+        makePreviewPairing()
         manager.onSessionsChanged = { [weak self] sessions in
             Task { @MainActor in self?.refresh(sessions) }
+        }
+        manager.onReceiversChanged = { [weak self] list in
+            Task { @MainActor in self?.refreshReceivers(list) }
+        }
+        manager.onReceiverEvent = { [weak self] id, event in
+            Task { @MainActor in self?.pairing[id]?.handle(event) }
         }
         RingPresenterRegistry.presenter = ringPresenter
         BatteryNotifier.requestAuthorization()
@@ -70,6 +79,45 @@ final class AppModel {
         }
     }
 
+    /// FREESPIN_PREVIEW_PAIRING=1: a pairing sheet frozen on the click step, for layout checks.
+    @ObservationIgnored private(set) var previewPairing: (PairingModel, ReceiverSnapshot)?
+
+    func makePreviewPairing() {
+        guard ProcessInfo.processInfo.environment["FREESPIN_PREVIEW_PAIRING"] == "1" else { return }
+        let r = ReceiverSnapshot(id: "preview", name: "Logi Bolt Receiver", kind: .bolt, connectedSlots: [])
+        let m = PairingModel(receiverID: r.id, kind: .bolt, manager: manager)
+        let d = DiscoveredDevice(counter: 0, kind: 2, productID: 0xB034, address: [0, 0, 0, 0, 0, 0], authentication: 2, name: "MX Master 3S")
+        m.phase = .passkey(d, PasskeyEntry(passkey: "666", method: .twoButtons), pressed: 2)
+        previewPairing = (m, r)
+    }
+
+    func pairingModel(for receiver: ReceiverSnapshot) -> PairingModel {
+        if let m = pairing[receiver.id] { return m }
+        let m = PairingModel(receiverID: receiver.id, kind: receiver.kind, manager: manager)
+        pairing[receiver.id] = m
+        return m
+    }
+
+    /// Devices reached through `receiver`, with their slot.
+    func devices(on receiver: ReceiverSnapshot) -> [(DeviceItem, UInt8)] {
+        devices.compactMap { item in
+            guard let s = sessions[item.id], let r = manager.receiverSlot(of: s), r.receiver == receiver.id else { return nil }
+            return (item, r.slot)
+        }
+    }
+
+    func unpair(_ item: DeviceItem, from receiver: ReceiverSnapshot) {
+        guard let s = sessions[item.id], let r = manager.receiverSlot(of: s), let rx = manager.receiver(id: r.receiver) else { return }
+        Task {
+            do { try await rx.unpair(slot: r.slot) } catch { append("unpair failed: \(error)") }
+        }
+    }
+
+    private func refreshReceivers(_ list: [ReceiverSnapshot]) {
+        receivers = list
+        if let sel = selection, sel.hasPrefix("rx:"), !list.contains(where: { "rx:" + $0.id == sel }) { selection = devices.first?.id }
+    }
+
     func refreshBattery() {
         for s in sessions.values { Task { await s.refreshBattery() } }
     }
@@ -77,7 +125,9 @@ final class AppModel {
     private func refresh(_ list: [DeviceSession]) {
         sessions = Dictionary(list.map { ($0.snapshot.id, $0) }, uniquingKeysWith: { a, _ in a })
         devices = list.map { DeviceItem(snapshot: $0.snapshot, settings: $0.settings) }
-        if selection == nil || !devices.contains(where: { $0.id == selection }) { selection = devices.first?.id }
+        if selection == nil || (!(selection ?? "").hasPrefix("rx:") && !devices.contains(where: { $0.id == selection })) {
+            selection = devices.first?.id
+        }
     }
 
     private func append(_ line: String) {

@@ -16,10 +16,17 @@ struct ContentView: View {
                         DeviceRow(item: item).tag(item.id)
                     }
                 }
+                if !model.receivers.isEmpty {
+                    Section("Receivers") {
+                        ForEach(model.receivers) { r in
+                            ReceiverRow(receiver: r).tag("rx:" + r.id)
+                        }
+                    }
+                }
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 240)
             .overlay {
-                if model.devices.isEmpty {
+                if model.devices.isEmpty && model.receivers.isEmpty {
                     ContentUnavailableView("No devices", systemImage: "computermouse",
                                            description: Text("Turn on a Logitech mouse or keyboard."))
                 }
@@ -27,7 +34,10 @@ struct ContentView: View {
         } detail: {
             VStack(spacing: 0) {
                 StatusBanners()
-                if let id = model.selection, let item = model.devices.first(where: { $0.id == id }) {
+                if let id = model.selection, id.hasPrefix("rx:"),
+                   let r = model.receivers.first(where: { "rx:" + $0.id == id }) {
+                    ReceiverDetail(receiver: r)
+                } else if let id = model.selection, let item = model.devices.first(where: { $0.id == id }) {
                     DeviceDetail(item: item)
                 } else {
                     ContentUnavailableView("Select a device", systemImage: "sidebar.left")
@@ -45,6 +55,9 @@ struct ContentView: View {
             }
         }
         .tint(.mauve)
+        .sheet(isPresented: .constant(model.previewPairing != nil)) {
+            if let (m, r) = model.previewPairing { PairingSheet(pairing: m, receiver: r) }
+        }
     }
 }
 

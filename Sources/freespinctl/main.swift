@@ -10,6 +10,9 @@ usage: freespinctl <command>
   features             list HID++ features of each device
   wheel                show 0x2121 wheel capability and mode
   controls             list divertable buttons (0x1B04)
+  receivers            list Bolt/Unifying/LIGHTSPEED receivers and their connected devices
+  pair                 pair a new device to the first receiver (Bolt: auto-picks the first device found)
+  unpair <slot>        unpair the device in <slot> from the first receiver
   wheel-mode <divert> <hires> <invert>   set wheel mode (0/1 each)
   sniff                print every HID++ notification (Ctrl-C to stop)
   trace <file.jsonl>   passively record 0x2121 wheel reports + scroll CGEvents (golden traces)
@@ -86,6 +89,25 @@ let task = Task {
                                  rep.prefix(5).map { String(format: "%02x", $0) }.joined(separator: " ")))
                 }
             }
+        case "receivers":
+            let (manager, _) = try await discover(timeout: 3.5)
+            if manager.allReceivers.isEmpty { print("no receivers found") }
+            for r in manager.allReceivers {
+                print("\(r.name) [\(r.kind.rawValue)]")
+                for s in manager.allSessions {
+                    if let slot = manager.receiverSlot(of: s), slot.receiver == r.id {
+                        print("  slot \(slot.slot): \(s.snapshot.name)")
+                    }
+                }
+            }
+        case "pair":
+            try await runPairing()
+        case "unpair":
+            guard args.count == 2, let slot = UInt8(args[1]) else { print(usage); exit(64) }
+            let (manager, _) = try await discover(timeout: 3.5)
+            guard let r = manager.allReceivers.first, let rx = manager.receiver(id: r.id) else { print("no receiver"); exit(1) }
+            try await rx.unpair(slot: slot)
+            print("unpaired slot \(slot) from \(r.name)")
         case "wheel-mode":
             guard args.count == 4 else { print(usage); exit(64) }
             let mode = WheelMode(diverted: args[1] == "1", highResolution: args[2] == "1", inverted: args[3] == "1")
