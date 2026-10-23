@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         model.start()
+        Updater.shared.start()
         if launchedAtLogin {
             // Start straight into the background; the window opens on the next launch from Finder/Spotlight.
             DispatchQueue.main.async { NSApp.windows.forEach { $0.orderOut(nil) } }

@@ -13,6 +13,9 @@ let package = Package(
         .executable(name: "freespinctl", targets: ["freespinctl"]),
         .executable(name: "FreespinApp", targets: ["FreespinApp"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
+    ],
     targets: [
         .target(name: "HIDPP", linkerSettings: [.linkedFramework("IOKit")]),
         .target(name: "ScrollEngine"),
@@ -20,7 +23,7 @@ let package = Package(
         .target(name: "Flow", linkerSettings: [.linkedFramework("Network"), .linkedFramework("AppKit")]),
         .target(name: "FreespinCore", dependencies: ["HIDPP", "ScrollEngine", "EventSynth", "Flow"]),
         .executableTarget(name: "freespinctl", dependencies: ["FreespinCore"]),
-        .executableTarget(name: "FreespinApp", dependencies: ["FreespinCore"]),
+        .executableTarget(name: "FreespinApp", dependencies: ["FreespinCore", .product(name: "Sparkle", package: "Sparkle")]),
         .testTarget(name: "HIDPPTests", dependencies: ["HIDPP"]),
         .testTarget(name: "ScrollEngineTests", dependencies: ["ScrollEngine"]),
         .testTarget(name: "FreespinCoreTests", dependencies: ["FreespinCore"]),
