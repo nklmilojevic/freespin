@@ -70,7 +70,7 @@ public final class ScriptedPointer: FlowPointer, @unchecked Sendable {
 
     public var isWatchingInput: Bool { lock.withLock { inputHandler != nil } }
 
-    /// Simulates a key press, or pointer use with `.pointer`. Returns false while nothing is watching input.
+    /// Simulates a key press, or pointer use with `.pointer(pushing:)`. Returns false while nothing is watching input.
     @discardableResult
     public func input(_ kind: FlowInput = .key) -> Bool {
         guard let h = lock.withLock({ inputHandler }) else { return false }

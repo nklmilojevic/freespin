@@ -221,6 +221,25 @@ final class FlowEngineTests: XCTestCase {
         waitUntil("stops watching input") { !a.pointer.isWatchingInput }
     }
 
+    func testPushingTheSameEdgeAfterTheGraceCancelsTheFollow() throws {
+        let a = try makeHost("A"), b = try makeHost("B")
+        pair(a, b)
+        let keyboard = SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                channel: 0, channelCount: 3))
+        a.engine.setDevices([mouse(channel: 0, present: true), keyboard])
+        b.engine.setDevices([mouse(channel: 1, present: false),
+                             SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                      channel: 1, channelCount: 3))])
+        waitUntil("inventory") { a.engine.settings.peer(b.hostID)?.channel(for: keyboardUnit) == 1 }
+        waitUntil("pointer") { a.pointer.isRunning }
+        keyboard.failSwitch = true
+        a.pointer.push(.right)
+        waitUntil("flowed out") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
+        Thread.sleep(forTimeInterval: 0.3)
+        a.pointer.input(.pointer(pushing: .right))
+        waitUntil("follow cancelled") { !a.pointer.isWatchingInput }
+    }
+
     func testPointerUseHereKeepsTheKeyboard() throws {
         let a = try makeHost("A"), b = try makeHost("B")
         pair(a, b)
@@ -237,14 +256,14 @@ final class FlowEngineTests: XCTestCase {
         waitUntil("flowed out") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
         keyboard.failSwitch = false
 
-        // Motion right after the flow out is the departing mouse, not the user.
-        a.pointer.input(.pointer)
+        // Motion still pushing through the edge right after the flow out is the departing mouse, not the user.
+        a.pointer.input(.pointer(pushing: .right))
         a.engine.queue.sync {}
         XCTAssertTrue(a.pointer.isWatchingInput)
 
-        // Later pointer use means someone is working here (mouse switched back by hand, or a trackpad).
-        Thread.sleep(forTimeInterval: 0.3)
-        a.pointer.input(.pointer)
+        // Any other pointer use, even right away, means someone is working here (mouse switched back by
+        // hand, or a trackpad).
+        a.pointer.input(.pointer(pushing: nil))
         waitUntil("follow cancelled") { !a.pointer.isWatchingInput }
         a.pointer.input(.key)
         a.engine.queue.sync {}

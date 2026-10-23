@@ -12,6 +12,12 @@ struct ContentView: View {
         NavigationSplitView {
             List(selection: $model.selection) {
                 Section("Devices") {
+                    // A row, not a list overlay: the Computers section below must stay usable with no devices.
+                    if model.devices.isEmpty && model.receivers.isEmpty {
+                        Label("Turn on a Logitech mouse or keyboard.", systemImage: "computermouse")
+                            .foregroundStyle(.secondary)
+                            .selectionDisabled()
+                    }
                     ForEach(model.devices) { item in
                         DeviceRow(item: item).tag(item.id)
                     }
@@ -28,12 +34,6 @@ struct ContentView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 240)
-            .overlay {
-                if model.devices.isEmpty && model.receivers.isEmpty {
-                    ContentUnavailableView("No devices", systemImage: "computermouse",
-                                           description: Text("Turn on a Logitech mouse or keyboard."))
-                }
-            }
         } detail: {
             VStack(spacing: 0) {
                 StatusBanners()

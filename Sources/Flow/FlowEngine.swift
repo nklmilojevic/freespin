@@ -28,8 +28,10 @@ public protocol FlowPointer: AnyObject, Sendable {
     func watchInput(_ handler: (@Sendable (FlowInput) -> Void)?)
 }
 
-public enum FlowInput: Sendable {
-    case key, pointer
+public enum FlowInput: Sendable, Equatable {
+    case key
+    /// Pointer moved, clicked or scrolled; `pushing` is the outer edge it is pushing through, if any.
+    case pointer(pushing: FlowEdge?)
 }
 
 extension FlowPointer {
@@ -134,8 +136,9 @@ public final class FlowEngine: @unchecked Sendable {
     /// Input arrived while a follow attempt was running: try once more when it finishes.
     private var followAgain = false
     private var watchingInput = false
-    /// Pointer input is ignored until then: motion still in flight from the mouse that just left.
+    /// Until then, pointer input still pushing through `followEdge` is the mouse that just left, not the user.
     private var followGraceUntil = Date.distantPast
+    private var followEdge: FlowEdge?
     /// Consecutive reconnect attempts per paired host, for backoff.
     private var redials: [String: Int] = [:]
 
@@ -569,6 +572,7 @@ public final class FlowEngine: @unchecked Sendable {
                         if let ch = paired.channel(for: k.unitID) { self.follow[k.unitID] = (ch, until) }
                     }
                     self.followGraceUntil = Date().addingTimeInterval(self.cooldown)
+                    self.followEdge = edge
                     self.updateInputWatch()
                     self.queue.asyncAfter(deadline: .now() + self.followWindow) { self.followKeyboards() }
                 }
@@ -630,10 +634,11 @@ public final class FlowEngine: @unchecked Sendable {
         switch input {
         case .key:
             followKeyboards()
-        case .pointer:
+        case let .pointer(pushing):
+            guard !follow.isEmpty else { return }
+            if pushing != nil, pushing == followEdge, Date() < followGraceUntil { return }
             // Someone is using a pointer here: the mouse came back without Flow (its Easy-Switch button) or
             // they're on a trackpad. Keep the keyboard on this computer.
-            guard Date() >= followGraceUntil, !follow.isEmpty else { return }
             follow.removeAll()
             updateInputWatch()
         }
