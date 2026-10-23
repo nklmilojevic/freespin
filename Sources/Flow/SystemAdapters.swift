@@ -44,7 +44,9 @@ public final class SystemPointer: FlowPointer, @unchecked Sendable {
     }
 
     public func configure(_ settings: FlowSettings) {
-        cornerInset = settings.avoidCorners ? 24 : 0
+        let inset: CGFloat = settings.avoidCorners ? 24 : 0
+        // `handle` reads it on the main queue.
+        DispatchQueue.main.async { self.cornerInset = inset }
     }
 
     public func watchInput(_ handler: (@Sendable (FlowInput) -> Void)?) {
@@ -84,11 +86,12 @@ public final class SystemPointer: FlowPointer, @unchecked Sendable {
         }
     }
 
-    public func warp(to point: CGPoint) {
+    public func warp(to point: CGPoint, then done: @escaping @Sendable () -> Void) {
         DispatchQueue.main.async {
             CGWarpMouseCursorPosition(point)
             // Without this the next physical move is swallowed by the post-warp suppression interval.
             CGAssociateMouseAndMouseCursorPosition(1)
+            done()
         }
     }
 
@@ -129,8 +132,8 @@ public final class SystemClipboard: FlowClipboard, @unchecked Sendable {
         return items
     }
 
+    /// An empty list clears the pasteboard.
     public func apply(_ items: [ClipboardItem]) {
-        guard !items.isEmpty else { return }
         DispatchQueue.main.async {
             let pb = NSPasteboard.general
             pb.clearContents()

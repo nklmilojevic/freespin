@@ -145,8 +145,11 @@ public struct FileIdentityStore: FlowIdentityStore {
         if let data = try? Data(contentsOf: url) { return FlowIdentity(signingKey: try .init(rawRepresentation: data)) }
         let identity = FlowIdentity()
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: url.path, contents: identity.signingKey.rawRepresentation,
-                                       attributes: [.posixPermissions: 0o600])
+        // An identity that isn't saved would come back as a different computer on the next launch.
+        guard FileManager.default.createFile(atPath: url.path, contents: identity.signingKey.rawRepresentation,
+                                             attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+        }
         return identity
     }
 }

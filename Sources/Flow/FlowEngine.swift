@@ -17,7 +17,8 @@ public protocol FlowPointer: AnyObject, Sendable {
     func start(onEdge: @escaping @Sendable (FlowEdge, Double, Bool) -> Void)
     func stop()
     var geometry: EdgeGeometry { get }
-    func warp(to point: CGPoint)
+    /// Places the cursor at `point`, then calls `done` once it is there.
+    func warp(to point: CGPoint, then done: @escaping @Sendable () -> Void)
     /// Moves the cursor a little away from `edge` when a flow out didn't move the mouse, so it doesn't bounce back.
     func retreat(from edge: FlowEdge)
     /// Applies pointer-related settings (corner avoidance).
@@ -130,9 +131,13 @@ public final class FlowEngine: @unchecked Sendable {
     /// Keyboards to send after the mouse once they wake: unit ID → target channel and deadline.
     private var follow: [String: (channel: Int, until: Date)] = [:]
     private var followBusy = false
+    /// Input arrived while a follow attempt was running: try once more when it finishes.
+    private var followAgain = false
     private var watchingInput = false
     /// Pointer input is ignored until then: motion still in flight from the mouse that just left.
     private var followGraceUntil = Date.distantPast
+    /// Consecutive reconnect attempts per paired host, for backoff.
+    private var redials: [String: Int] = [:]
 
     /// How long the receiver gets to place its cursor before the switch is abandoned.
     public var readyTimeout: TimeInterval = 0.8
@@ -141,6 +146,8 @@ public final class FlowEngine: @unchecked Sendable {
     /// A sleeping keyboard misses SetCurrentHost; for this long after a flow out it follows the mouse
     /// as soon as it wakes (a key press or reconnect) and is still on this computer's channel.
     public var followWindow: TimeInterval = 60
+    /// First reconnect delay after a paired link drops; doubles per failed attempt, up to 30 s.
+    public var redialDelay: TimeInterval = 1
 
     public init(identity: FlowIdentity, name: String, store: FlowSettingsStore, pointer: FlowPointer,
                 clipboard: FlowClipboard, bonjour: Bool = true) {
@@ -161,8 +168,8 @@ public final class FlowEngine: @unchecked Sendable {
     public func start(port: UInt16 = 0) throws {
         try queue.sync {
             guard !started else { return }
-            started = true
             try node.start(port: port, bonjour: bonjour)
+            started = true
             updatePointer()
             publish()
         }
@@ -312,6 +319,7 @@ public final class FlowEngine: @unchecked Sendable {
                 return
             }
             link.trusted = true
+            redials[peer.hostID] = nil
             dropDuplicates(of: link)
             if known.name != peer.name {
                 store.update { s in
@@ -346,9 +354,22 @@ public final class FlowEngine: @unchecked Sendable {
                 emit(.pairingCancelled(hostID: id))
             }
             emit(.linkDown(hostID: id))
+            // Bonjour results don't change when only the TCP link drops, so discovery won't redial it.
+            if started, store.settings.peer(id) != nil, anyLink(id) == nil { scheduleRedial(id) }
         }
         updatePointer()
         publish()
+    }
+
+    private func scheduleRedial(_ hostID: String) {
+        let attempt = redials[hostID, default: 0]
+        redials[hostID] = attempt + 1
+        let delay = min(redialDelay * pow(2, Double(min(attempt, 5))), 30)
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.started, self.store.settings.peer(hostID) != nil, self.anyLink(hostID) == nil,
+                  let host = self.discovered.first(where: { $0.hostID == hostID }) else { return }
+            _ = self.node.connect(to: host.endpoint)
+        }
     }
 
     private func trustedLink(_ hostID: String) -> PeerLink? {
@@ -506,7 +527,8 @@ public final class FlowEngine: @unchecked Sendable {
     private func finishFlowOut(to link: PeerLink, edge: FlowEdge) {
         guard let peer = link.peer, let paired = store.settings.peer(peer.hostID) else { busy = false; return }
         let s = store.settings
-        if s.syncClipboard, let items = clipboard.captureIfChanged(), !items.isEmpty {
+        // An empty list is sent too: the other computer shouldn't paste something older than the last copy here.
+        if s.syncClipboard, let items = clipboard.captureIfChanged() {
             link.send(.clipboard(items))
             emit(.clipboardSent(items: items.count))
         }
@@ -514,23 +536,27 @@ public final class FlowEngine: @unchecked Sendable {
         for d in candidates where d.record.kind == .keyboard && paired.channel(for: d.record.unitID) == nil {
             emit(.skipped("\(d.record.name) has no channel on \(peer.name); connect it there once with Freespin running"))
         }
-        // Keyboards first: once the mouse leaves, this computer may lose the receiver link too.
-        let targets = candidates
-            .compactMap { d in paired.channel(for: d.record.unitID).map { (d, $0) } }
-            .sorted { ($0.0.record.kind == .keyboard ? 0 : 1) < ($1.0.record.kind == .keyboard ? 0 : 1) }
+        let targets = candidates.compactMap { d in paired.channel(for: d.record.unitID).map { (d, $0) } }
+        // Mouse first: a keyboard that left can't be called back, so it only goes once the mouse has.
+        let mice = targets.filter { $0.0.record.kind == .mouse }
+        let keyboards = targets.filter { $0.0.record.kind == .keyboard }
         Task {
             var switched: [String: Int] = [:]
-            for (device, channel) in targets {
-                do {
-                    try await device.switchHost(to: channel)
-                    switched[device.record.unitID] = channel
-                } catch {
-                    self.emit(.error("switch \(device.record.name) to channel \(channel + 1) failed: \(error)"))
+            func send(_ list: [(FlowLocalDevice, Int)]) async {
+                for (device, channel) in list {
+                    do {
+                        try await device.switchHost(to: channel)
+                        switched[device.record.unitID] = channel
+                    } catch {
+                        self.emit(.error("switch \(device.record.name) to channel \(channel + 1) failed: \(error)"))
+                    }
                 }
             }
+            await send(mice)
+            let mouseLeft = !switched.isEmpty
+            if mouseLeft { await send(keyboards) }
             self.queue.async {
                 // The mouse stayed here: move the cursor off the edge so it doesn't push straight through again.
-                let mouseLeft = targets.contains { $0.0.record.kind == .mouse && switched[$0.0.record.unitID] != nil }
                 if !mouseLeft { self.pointer.retreat(from: edge) }
                 self.busy = false
                 self.quietUntil = Date().addingTimeInterval(self.cooldown)
@@ -558,7 +584,7 @@ public final class FlowEngine: @unchecked Sendable {
         let now = Date()
         follow = follow.filter { $0.value.until > now }
         updateInputWatch()
-        guard !followBusy else { return }
+        guard !followBusy else { followAgain = true; return }
         let due = follow.compactMap { id, f in devices[id].map { ($0, f.channel) } }
         guard !due.isEmpty else { return }
         followBusy = true
@@ -574,6 +600,10 @@ public final class FlowEngine: @unchecked Sendable {
             }
             self.queue.async {
                 self.followBusy = false
+                if self.followAgain {
+                    self.followAgain = false
+                    self.queue.async { self.followKeyboards() }
+                }
                 for (id, channel) in done {
                     self.follow[id] = nil
                     self.present.remove(id)
@@ -613,12 +643,20 @@ public final class FlowEngine: @unchecked Sendable {
         guard let peer = link.peer else { return }
         follow.removeAll()
         updateInputWatch()
-        if let point = pointer.geometry.entryPoint(edge: edge, fraction: fraction) {
-            pointer.warp(to: point)
-            emit(.flowedIn(hostID: peer.hostID, point: point))
+        // Without a cursor here, don't answer: the sender times out and keeps the mouse.
+        guard let point = pointer.geometry.entryPoint(edge: edge, fraction: fraction) else {
+            emit(.skipped("no display to place the cursor on; \(peer.name) keeps the mouse"))
+            return
         }
         quietUntil = Date().addingTimeInterval(cooldown)
-        link.send(.ready(id: id))
+        pointer.warp(to: point) { [weak self] in
+            guard let self else { return }
+            self.queue.async {
+                self.quietUntil = Date().addingTimeInterval(self.cooldown)
+                self.emit(.flowedIn(hostID: peer.hostID, point: point))
+                link.send(.ready(id: id))
+            }
+        }
     }
 
     // MARK: - Status

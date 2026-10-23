@@ -59,7 +59,10 @@ public final class ScriptedPointer: FlowPointer, @unchecked Sendable {
 
     public func stop() { lock.withLock { handler = nil } }
 
-    public func warp(to point: CGPoint) { lock.withLock { warpLog.append(point) } }
+    public func warp(to point: CGPoint, then done: @escaping @Sendable () -> Void) {
+        lock.withLock { warpLog.append(point) }
+        done()
+    }
 
     public func retreat(from edge: FlowEdge) { lock.withLock { retreatLog.append(edge) } }
 
