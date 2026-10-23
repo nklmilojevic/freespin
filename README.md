@@ -137,7 +137,35 @@ With home-manager, the flake provides a module that installs the signed release 
 }
 ```
 
-The agent runs a copy of the binary at `~/Library/Application Support/Freespin/bin/freespinctl`, so its Accessibility and Input Monitoring grants survive updates. On first start, grant both to that file. The daemon waits and starts once they're on. Logs go to `~/Library/Logs/freespin.log`.
+With Homebrew:
+
+```fish
+brew install --cask nklmilojevic/freespin/freespin   # the app, which updates itself
+brew install nklmilojevic/freespin/freespinctl       # the CLI; `brew services start freespinctl` runs the daemon
+```
+
+The Nix agent runs a copy of the binary at `~/Library/Application Support/Freespin/bin/freespinctl`, so its Accessibility and Input Monitoring grants survive updates. On first start, grant both to that file. The daemon waits and starts once they're on. Logs go to `~/Library/Logs/freespin.log`.
+
+## Releases and updates
+
+The app checks for updates with [Sparkle](https://sparkle-project.org). It reads `appcast.xml` from the latest GitHub release, so nothing else is hosted. "Check for Updates…" and automatic checks are in the gear menu.
+
+Pushing a `v*` tag makes CI sign the app, `freespinctl` and the DMG with the Developer ID, notarize them, staple the app and the DMG, and publish the DMG, the CLI tarball, `SHA256SUMS` and `appcast.xml`. It needs these repository secrets:
+
+| Secret | What it is |
+|---|---|
+| `DEVELOPER_ID_P12`, `DEVELOPER_ID_P12_PASSWORD` | the Developer ID Application certificate and key, base64-encoded `.p12` |
+| `NOTARY_KEY_P8`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID` | an App Store Connect API key for `notarytool`, base64-encoded `.p8` |
+| `SPARKLE_PRIVATE_KEY` | the EdDSA key from Sparkle's `generate_keys -x`; its public half is `SUPublicEDKey` in `scripts/build-app.sh` |
+
+A signed, notarized build on your own Mac:
+
+```fish
+SIGN_IDENTITY="Developer ID Application: …" NOTARY_PROFILE=<notarytool profile> ./scripts/dmg.sh
+./scripts/appcast.sh <version>          # signs with the key in your login keychain
+```
+
+After a release, `scripts/update-nix-release.sh <version>` points the Nix package at it. The Homebrew tap updates itself.
 
 ## How it works
 

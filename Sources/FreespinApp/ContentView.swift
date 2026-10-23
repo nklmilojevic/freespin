@@ -88,6 +88,7 @@ struct AppMenu: View {
                     loginError = error.localizedDescription
                 }
             }))
+            UpdateMenuItems()
             Divider()
             Text("Closing this window keeps Freespin running.")
             Button("Quit Freespin") { NSApp.terminate(nil) }
@@ -95,7 +96,7 @@ struct AppMenu: View {
         } label: {
             Label("Freespin", systemImage: "gearshape")
         }
-        .help("Open at login, quit")
+        .help("Open at login, updates, quit")
         .alert("Couldn't change login item", isPresented: Binding(get: { loginError != nil }, set: { if !$0 { loginError = nil } })) {
             Button("OK") { loginError = nil }
         } message: {
