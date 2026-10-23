@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        model.onIncomingPairing = { [weak self] in self?.showMainWindow() }
         model.start()
         if launchedAtLogin {
             // Start straight into the background; the window opens on the next launch from Finder/Spotlight.

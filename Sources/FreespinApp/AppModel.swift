@@ -1,5 +1,6 @@
 import AppKit
 import EventSynth
+import Flow
 import Foundation
 import HIDPP
 import FreespinCore
@@ -23,12 +24,17 @@ final class AppModel {
     var accessibilityGranted = ScrollEventPoster.hasPostPermission()
     var optionsPlusRunning = false
     var startError: String?
+    var flow = FlowStatus()
+    var flowError: String?
+    /// Another computer asked to pair; the sheet showing its code needs a visible window.
+    @ObservationIgnored var onIncomingPairing: (() -> Void)?
 
     /// FREESPIN_INSPECT_ONLY=1 shows devices without diverting the wheel or writing settings.
     private let manager = DeviceManager(drive: ProcessInfo.processInfo.environment["FREESPIN_INSPECT_ONLY"] != "1")
     private var sessions: [String: DeviceSession] = [:]
     private let ringPresenter = ActionsRingPresenter()
     private var permissionTimer: Timer?
+    @ObservationIgnored private(set) var flowCoordinator: FlowCoordinator?
 
     private var started = false
 
@@ -56,6 +62,7 @@ final class AppModel {
         } catch {
             startError = "\(error)"
         }
+        startFlow()
         checkEnvironment()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.checkEnvironment() }
@@ -63,8 +70,41 @@ final class AppModel {
     }
 
     func shutdown() async {
+        flowCoordinator?.engine.stop()
         await manager.stopAll()
     }
+
+    /// FREESPIN_FLOW=0 leaves Flow off entirely (no listener, no Bonjour). FREESPIN_FLOW_DIR=<dir> keeps the
+    /// Flow identity and settings there instead of the keychain (a second test instance on one Mac).
+    private func startFlow() {
+        let env = ProcessInfo.processInfo.environment
+        guard env["FREESPIN_FLOW"] != "0" else { return }
+        do {
+            let coordinator = try FlowCoordinator.standard(canSwitch: manager.drive,
+                                                           stateDirectory: env["FREESPIN_FLOW_DIR"].map { URL(fileURLWithPath: $0) },
+                                                           name: env["FREESPIN_FLOW_NAME"])
+            coordinator.engine.onStatus = { [weak self] status in
+                Task { @MainActor in
+                    guard let self else { return }
+                    let incoming = status.pairing.map { !$0.outgoing && $0.hostID != self.flow.pairing?.hostID } ?? false
+                    self.flow = status
+                    if incoming { self.onIncomingPairing?() }
+                }
+            }
+            coordinator.engine.onEvent = { [weak self] event in
+                guard case let .error(message) = event else { return }
+                NSLog("Freespin: flow: %@", message)
+                Task { @MainActor in self?.append("flow: \(message)") }
+            }
+            try coordinator.engine.start()
+            flowCoordinator = coordinator
+            coordinator.sessionsChanged(Array(sessions.values))
+        } catch {
+            flowError = "\(error)"
+        }
+    }
+
+    var flowEngine: FlowEngine? { flowCoordinator?.engine }
 
     func requestAccessibility() {
         _ = ScrollEventPoster.hasPostPermission(prompt: true)
@@ -125,7 +165,8 @@ final class AppModel {
     private func refresh(_ list: [DeviceSession]) {
         sessions = Dictionary(list.map { ($0.snapshot.id, $0) }, uniquingKeysWith: { a, _ in a })
         devices = list.map { DeviceItem(snapshot: $0.snapshot, settings: $0.settings) }
-        if selection == nil || (!(selection ?? "").hasPrefix("rx:") && !devices.contains(where: { $0.id == selection })) {
+        flowCoordinator?.sessionsChanged(list)
+        if selection == nil || (!(selection ?? "").hasPrefix("rx:") && selection != "flow" && !devices.contains(where: { $0.id == selection })) {
             selection = devices.first?.id
         }
     }

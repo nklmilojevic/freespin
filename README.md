@@ -38,11 +38,12 @@ Memory is the physical footprint reported by `top`. Idle CPU is the process's CP
 - **Actions Ring**: hold a button and a radial menu of eight actions appears at the cursor; move toward one and release.
 - **Per-app settings**: different scroll speed, smoothness, direction or buttons while a given app is frontmost.
 - **Logi Bolt and Unifying receivers**: devices behind a receiver show up and disconnect live, and you can pair and unpair from the app. Bolt pairing uses the same two-button confirmation as Options+, one highlighted button at a time.
+- **Flow (experimental)**: push the pointer past the screen edge facing another Mac running Freespin and the mouse switches to it (HID++ Easy-Switch), with linked Logitech keyboards and the clipboard following. It is local only: computers find each other with Bonjour and talk over an encrypted TCP connection. You pair them once by checking that both show the same six-digit code; no account or Logitech server is involved. It doesn't interoperate with Options+ Flow. So far it has been tested with simulated devices between two processes and between a Mac and a macOS VM (`freespinctl flow-sim`), not yet with a real mouse moving between two Macs.
 - **Low-battery notifications** at 15 % and 5 %.
 - **Keyboard**: Fn-key inversion and backlight for Logitech keyboards that support them (implemented, not yet tested on hardware).
 - Runs in the background with no Dock icon. Closing the window keeps the mouse working, opening Freespin again brings the window back, and Quit (⌘Q or the gear menu) gives the wheel back to macOS. "Open at Login" starts it hidden.
 
-Not included: Flow, Smart Actions (macros), firmware updates, accounts, analytics, webcam and presenter features.
+Not included: Smart Actions (macros), firmware updates, accounts, analytics, webcam and presenter features.
 
 <p align="center"><img src="docs/bolt-pairing.png" width="680" alt="Pairing an MX Master 3S with a Logi Bolt receiver"></p>
 
@@ -105,7 +106,8 @@ FreespinApp ── SwiftUI window
 | `HIDPP` | IOKit transport, HID++ framing, request/response matching, typed features |
 | `ScrollEngine` | Pure-Swift wheel pipeline: timing, acceleration and scroll event modelling (no AppKit, deterministic, unit-tested) |
 | `EventSynth` | Posting scroll, key and mouse events; gesture and Actions Ring logic |
-| `FreespinCore` | Discovery, per-device sessions, settings store, frontmost-app tracking |
+| `Flow` | Freespin Flow: Bonjour discovery, Ed25519/X25519 handshake with pairing codes, ChaCha20-Poly1305 framing, edge geometry, clipboard |
+| `FreespinCore` | Discovery, per-device sessions, settings store, frontmost-app tracking, Flow device adapter |
 | `FreespinApp` / `freespinctl` | The app and the CLI |
 
 No Logitech code or assets are included in this repository.

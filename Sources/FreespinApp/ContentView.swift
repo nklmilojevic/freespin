@@ -12,9 +12,18 @@ struct ContentView: View {
         NavigationSplitView {
             List(selection: $model.selection) {
                 Section("Devices") {
+                    // A row, not a list overlay: the Computers section below must stay usable with no devices.
+                    if model.devices.isEmpty && model.receivers.isEmpty {
+                        Label("Turn on a Logitech mouse or keyboard.", systemImage: "computermouse")
+                            .foregroundStyle(.secondary)
+                            .selectionDisabled()
+                    }
                     ForEach(model.devices) { item in
                         DeviceRow(item: item).tag(item.id)
                     }
+                }
+                Section("Computers") {
+                    FlowRow(status: model.flow).tag("flow")
                 }
                 if !model.receivers.isEmpty {
                     Section("Receivers") {
@@ -25,16 +34,12 @@ struct ContentView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 240)
-            .overlay {
-                if model.devices.isEmpty && model.receivers.isEmpty {
-                    ContentUnavailableView("No devices", systemImage: "computermouse",
-                                           description: Text("Turn on a Logitech mouse or keyboard."))
-                }
-            }
         } detail: {
             VStack(spacing: 0) {
                 StatusBanners()
-                if let id = model.selection, id.hasPrefix("rx:"),
+                if model.selection == "flow" {
+                    FlowDetail()
+                } else if let id = model.selection, id.hasPrefix("rx:"),
                    let r = model.receivers.first(where: { "rx:" + $0.id == id }) {
                     ReceiverDetail(receiver: r)
                 } else if let id = model.selection, let item = model.devices.first(where: { $0.id == id }) {
@@ -60,6 +65,10 @@ struct ContentView: View {
         .tint(.mauve)
         .sheet(isPresented: .constant(model.previewPairing != nil)) {
             if let (m, r) = model.previewPairing { PairingSheet(pairing: m, receiver: r) }
+        }
+        // A pairing request can come from the other computer while any page is showing.
+        .sheet(isPresented: Binding(get: { model.flow.pairing != nil }, set: { if !$0 { model.flowEngine?.cancelPairing() } })) {
+            if let p = model.flow.pairing { FlowPairingSheet(pairing: p) }
         }
     }
 }
