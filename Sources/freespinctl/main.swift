@@ -17,6 +17,8 @@ usage: freespinctl <command>
   sniff                print every HID++ notification (Ctrl-C to stop)
   trace <file.jsonl>   passively record 0x2121 wheel reports + scroll CGEvents (golden traces)
   run                  run the native scroll engine headless (Ctrl-C restores the wheel)
+  hosts                show Easy-Switch channels (0x1814) and unit IDs (0x0003) used by Flow (read-only)
+  flow-sim [options]   headless Flow node with a simulated mouse (freespinctl flow-sim --help)
 """
 
 let args = Array(CommandLine.arguments.dropFirst())
@@ -126,6 +128,16 @@ let task = Task {
         case "trace":
             guard args.count == 2 else { print(usage); exit(64) }
             try await runTrace(path: args[1])
+        case "hosts":
+            let (_, sessions) = try await discover()
+            for s in sessions where s.snapshot.has(.changeHost) {
+                let host = try? await s.device.hostInfo()
+                let id = try? await s.device.identity()
+                print("\(s.snapshot.name)  unit=\(id?.key ?? "?")  channel=\(host.map { "\($0.current + 1)/\($0.count)" } ?? "?")")
+            }
+        case "flow-sim":
+            if args.contains("--help") { print(flowSimUsage); exit(0) }
+            try await runFlowSim(Array(args.dropFirst()))
         case "run":
             guard ScrollEventPoster.hasPostPermission(prompt: true) else {
                 print("Accessibility permission is required to post scroll events.")

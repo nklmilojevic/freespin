@@ -101,6 +101,19 @@ public final class HIDPPDevice: @unchecked Sendable {
         throw lastError
     }
 
+    /// Sends a request without waiting for (or matching) a response, for calls that end the link.
+    public func post(featureIndex: UInt8, function: UInt8, parameters: [UInt8] = [],
+                     reportID: HIDPPReportID = .long) throws {
+        let swid = lock.withLock { () -> UInt8 in
+            let id = nextSoftwareID
+            nextSoftwareID = nextSoftwareID >= 0x0F ? 1 : nextSoftwareID + 1
+            return id
+        }
+        let message = HIDPPMessage(reportID: reportID, deviceIndex: deviceIndex, featureIndex: featureIndex,
+                                   function: function, softwareID: swid, parameters: parameters)
+        try transport.send(message.encoded())
+    }
+
     /// Resolves a feature ID to its index via Root (0x0000) GetFeature, caching the result.
     public func featureIndex(for featureID: UInt16) async throws -> UInt8 {
         if featureID == 0x0000 { return 0 }

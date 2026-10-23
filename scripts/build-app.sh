@@ -42,6 +42,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSLocalNetworkUsageDescription</key><string>Flow finds and connects to your other computers running Freespin on this network.</string>
+    <key>NSBonjourServices</key><array><string>_freespin-flow._tcp</string></array>
 </dict>
 </plist>
 PLIST
