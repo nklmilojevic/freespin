@@ -209,14 +209,45 @@ final class FlowEngineTests: XCTestCase {
         keyboardA.failSwitch = true
         a.pointer.push(.right)
         waitUntil("flowed out") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
-        XCTAssertTrue(a.pointer.isWatchingKeys)
+        XCTAssertTrue(a.pointer.isWatchingInput)
 
         // Awake: the next key press sends it after the mouse.
         keyboardA.failSwitch = false
-        XCTAssertTrue(a.pointer.pressKey())
+        XCTAssertTrue(a.pointer.input(.key))
         waitUntil("keyboard followed") { a.events.contains(.keyboardFollowed(unitID: keyboardUnit, channel: 1)) }
         XCTAssertEqual(keyboardA.switches, [1])
-        waitUntil("stops watching keys") { !a.pointer.isWatchingKeys }
+        waitUntil("stops watching input") { !a.pointer.isWatchingInput }
+    }
+
+    func testPointerUseHereKeepsTheKeyboard() throws {
+        let a = try makeHost("A"), b = try makeHost("B")
+        pair(a, b)
+        let keyboard = SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                channel: 0, channelCount: 3))
+        a.engine.setDevices([mouse(channel: 0, present: true), keyboard])
+        b.engine.setDevices([mouse(channel: 1, present: false),
+                             SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                      channel: 1, channelCount: 3))])
+        waitUntil("inventory") { a.engine.settings.peer(b.hostID)?.channel(for: keyboardUnit) == 1 }
+        waitUntil("pointer") { a.pointer.isRunning }
+        keyboard.failSwitch = true
+        a.pointer.push(.right)
+        waitUntil("flowed out") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
+        keyboard.failSwitch = false
+
+        // Motion right after the flow out is the departing mouse, not the user.
+        a.pointer.input(.pointer)
+        a.engine.queue.sync {}
+        XCTAssertTrue(a.pointer.isWatchingInput)
+
+        // Later pointer use means someone is working here (mouse switched back by hand, or a trackpad).
+        Thread.sleep(forTimeInterval: 0.3)
+        a.pointer.input(.pointer)
+        waitUntil("follow cancelled") { !a.pointer.isWatchingInput }
+        a.pointer.input(.key)
+        a.engine.queue.sync {}
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertTrue(keyboard.switches.isEmpty, "the keyboard stays with the user")
     }
 
     func testSwitchedKeyboardIsNotSentAgain() throws {
@@ -233,7 +264,7 @@ final class FlowEngineTests: XCTestCase {
         a.pointer.push(.right)
         waitUntil("flowed out") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
         XCTAssertEqual(keyboard.switches, [1])
-        a.pointer.pressKey()
+        a.pointer.input(.key)
         a.engine.queue.sync {}
         Thread.sleep(forTimeInterval: 0.1)
         XCTAssertEqual(keyboard.switches, [1], "it left, so it doesn't answer on A's channel and isn't switched again")

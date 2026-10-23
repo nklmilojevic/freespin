@@ -6,7 +6,7 @@ import Foundation
 public final class SystemPointer: FlowPointer, @unchecked Sendable {
     public var cornerInset: CGFloat = 0
     private var monitors: [Any] = []
-    private var keyMonitors: [Any] = []
+    private var inputMonitors: [Any] = []
     private var filter = EdgePushFilter()
     private var callback: (@Sendable (FlowEdge, Double, Bool) -> Void)?
     private var lastFraction = 0.0
@@ -47,20 +47,22 @@ public final class SystemPointer: FlowPointer, @unchecked Sendable {
         cornerInset = settings.avoidCorners ? 24 : 0
     }
 
-    public func watchKeys(_ handler: (@Sendable () -> Void)?) {
+    public func watchInput(_ handler: (@Sendable (FlowInput) -> Void)?) {
         DispatchQueue.main.async {
-            self.keyMonitors.forEach(NSEvent.removeMonitor)
-            self.keyMonitors.removeAll()
+            self.inputMonitors.forEach(NSEvent.removeMonitor)
+            self.inputMonitors.removeAll()
             guard let handler else { return }
-            let mask: NSEvent.EventTypeMask = [.keyDown, .flagsChanged]
-            if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { _ in handler() }) {
-                self.keyMonitors.append(global)
+            let mask: NSEvent.EventTypeMask = [.keyDown, .flagsChanged, .mouseMoved, .leftMouseDown, .rightMouseDown,
+                                               .otherMouseDown, .scrollWheel]
+            let report: (NSEvent) -> Void = { e in handler(e.type == .keyDown || e.type == .flagsChanged ? .key : .pointer) }
+            if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: report) {
+                self.inputMonitors.append(global)
             }
             if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { e in
-                handler()
+                report(e)
                 return e
             }) {
-                self.keyMonitors.append(local)
+                self.inputMonitors.append(local)
             }
         }
     }

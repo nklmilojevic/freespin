@@ -22,13 +22,18 @@ public protocol FlowPointer: AnyObject, Sendable {
     func retreat(from edge: FlowEdge)
     /// Applies pointer-related settings (corner avoidance).
     func configure(_ settings: FlowSettings)
-    /// Calls `handler` on every key press while set; nil stops. Only says a key was pressed, never which.
-    func watchKeys(_ handler: (@Sendable () -> Void)?)
+    /// Calls `handler` on every key press and pointer move or click while set; nil stops.
+    /// Only says what kind of input happened, never which key.
+    func watchInput(_ handler: (@Sendable (FlowInput) -> Void)?)
+}
+
+public enum FlowInput: Sendable {
+    case key, pointer
 }
 
 extension FlowPointer {
     public func configure(_ settings: FlowSettings) {}
-    public func watchKeys(_ handler: (@Sendable () -> Void)?) {}
+    public func watchInput(_ handler: (@Sendable (FlowInput) -> Void)?) {}
 }
 
 public protocol FlowClipboard: AnyObject, Sendable {
@@ -125,7 +130,9 @@ public final class FlowEngine: @unchecked Sendable {
     /// Keyboards to send after the mouse once they wake: unit ID → target channel and deadline.
     private var follow: [String: (channel: Int, until: Date)] = [:]
     private var followBusy = false
-    private var watchingKeys = false
+    private var watchingInput = false
+    /// Pointer input is ignored until then: motion still in flight from the mouse that just left.
+    private var followGraceUntil = Date.distantPast
 
     /// How long the receiver gets to place its cursor before the switch is abandoned.
     public var readyTimeout: TimeInterval = 0.8
@@ -169,7 +176,7 @@ public final class FlowEngine: @unchecked Sendable {
             links.removeAll()
             stopPointer()
             follow.removeAll()
-            updateKeyWatch()
+            updateInputWatch()
         }
     }
 
@@ -535,7 +542,8 @@ public final class FlowEngine: @unchecked Sendable {
                     for k in s.localDevices where k.kind == .keyboard {
                         if let ch = paired.channel(for: k.unitID) { self.follow[k.unitID] = (ch, until) }
                     }
-                    self.updateKeyWatch()
+                    self.followGraceUntil = Date().addingTimeInterval(self.cooldown)
+                    self.updateInputWatch()
                     self.queue.asyncAfter(deadline: .now() + self.followWindow) { self.followKeyboards() }
                 }
                 self.emit(.flowedOut(hostID: peer.hostID, edge: edge, switched: switched))
@@ -549,7 +557,7 @@ public final class FlowEngine: @unchecked Sendable {
         dispatchPrecondition(condition: .onQueue(queue))
         let now = Date()
         follow = follow.filter { $0.value.until > now }
-        updateKeyWatch()
+        updateInputWatch()
         guard !followBusy else { return }
         let due = follow.compactMap { id, f in devices[id].map { ($0, f.channel) } }
         guard !due.isEmpty else { return }
@@ -571,27 +579,40 @@ public final class FlowEngine: @unchecked Sendable {
                     self.present.remove(id)
                     self.emit(.keyboardFollowed(unitID: id, channel: channel))
                 }
-                self.updateKeyWatch()
+                self.updateInputWatch()
                 if !done.isEmpty { self.publish() }
             }
         }
     }
 
-    private func updateKeyWatch() {
+    private func updateInputWatch() {
         let want = !follow.isEmpty
-        guard want != watchingKeys else { return }
-        watchingKeys = want
-        guard want else { pointer.watchKeys(nil); return }
-        pointer.watchKeys { [weak self] in
+        guard want != watchingInput else { return }
+        watchingInput = want
+        guard want else { pointer.watchInput(nil); return }
+        pointer.watchInput { [weak self] input in
             guard let self else { return }
-            self.queue.async { self.followKeyboards() }
+            self.queue.async { self.inputSeen(input) }
+        }
+    }
+
+    private func inputSeen(_ input: FlowInput) {
+        switch input {
+        case .key:
+            followKeyboards()
+        case .pointer:
+            // Someone is using a pointer here: the mouse came back without Flow (its Easy-Switch button) or
+            // they're on a trackpad. Keep the keyboard on this computer.
+            guard Date() >= followGraceUntil, !follow.isEmpty else { return }
+            follow.removeAll()
+            updateInputWatch()
         }
     }
 
     private func flowIn(id: UInt32, edge: FlowEdge, fraction: Double, from link: PeerLink) {
         guard let peer = link.peer else { return }
         follow.removeAll()
-        updateKeyWatch()
+        updateInputWatch()
         if let point = pointer.geometry.entryPoint(edge: edge, fraction: fraction) {
             pointer.warp(to: point)
             emit(.flowedIn(hostID: peer.hostID, point: point))
