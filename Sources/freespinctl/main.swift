@@ -19,6 +19,7 @@ usage: freespinctl <command>
   run                  run the native scroll engine headless (Ctrl-C restores the wheel)
   hosts                show Easy-Switch channels (0x1814) and unit IDs (0x0003) used by Flow (read-only)
   flow-sim [options]   headless Flow node with a simulated mouse (freespinctl flow-sim --help)
+  daemon [options]     run headless from a config file, e.g. as a LaunchAgent (freespinctl daemon --help)
 """
 
 let args = Array(CommandLine.arguments.dropFirst())
@@ -59,7 +60,7 @@ let task = Task {
             if sessions.isEmpty { print("no HID++ devices found") }
             for s in sessions {
                 let snap = s.snapshot
-                var line = "\(snap.name)  pid=\(String(format: "%04x", snap.productID))  \(snap.transport)  idx=\(snap.deviceIndex)"
+                var line = "\(snap.name)  key=\(snap.id)  pid=\(String(format: "%04x", snap.productID))  \(snap.transport)  idx=\(snap.deviceIndex)"
                 if let b = snap.battery { line += "  battery=\(b.percent.map { "\($0)%" } ?? b.level) \(b.charging)" }
                 if let d = snap.dpi { line += "  dpi=\(d)" }
                 print(line)
@@ -138,6 +139,9 @@ let task = Task {
         case "flow-sim":
             if args.contains("--help") { print(flowSimUsage); exit(0) }
             try await runFlowSim(Array(args.dropFirst()))
+        case "daemon":
+            if args.contains("--help") { print(daemonUsage); exit(0) }
+            try await runDaemon(Array(args.dropFirst()))
         case "run":
             guard ScrollEventPoster.hasPostPermission(prompt: true) else {
                 print("Accessibility permission is required to post scroll events.")

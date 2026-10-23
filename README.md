@@ -84,6 +84,78 @@ swift run freespinctl trace out.jsonl   # record wheel reports and scroll events
 swift run freespinctl run         # headless scroll engine
 ```
 
+## Running without the app
+
+`freespinctl daemon` does what the app does in the background, configured by a JSON file instead of the window. Use it as a LaunchAgent, for example from Nix. Don't run it alongside the app.
+
+```json
+{
+  "default": { "scrollSpeed": 60, "smoothScrolling": true },
+  "devices": {
+    "MX Master 3S": {
+      "dpi": 1600,
+      "smartShift": true,
+      "smartShiftSensitivity": 12,
+      "buttons": { "gesture": "gestures", "back": "missionControl" },
+      "apps": { "com.apple.Safari": { "scrollSpeed": 45 } }
+    }
+  },
+  "notifications": true
+}
+```
+
+- Settings a file leaves out keep the value the device already has. `default` applies to every device. Entries under `devices` match a device by name, product ID (`"b034"`) or device key (`"b034-FD094774-ff"`, as `freespinctl list` shows it), and the more specific entry wins.
+- Device keys: `scrollSpeed` and `thumbwheelSpeed` (0–100, 50 is the default), `smoothScrolling`, `naturalScrolling`, `thumbwheelNaturalScrolling`, `smartShift`, `smartShiftSensitivity` (1–50), `smartShiftTorque` (1–100), `dpi`, `gestureStyle` (`shortcuts` or `trackpad`), `fnKeysFirst`, `backlight`, `buttons` and `apps` (bundle ID to `scrollSpeed`, `smoothScrolling`, `naturalScrolling`, `thumbwheelSpeed`, `buttons`).
+- Buttons: `middle`, `back`, `forward`, `gesture`, `modeShift`, or a control ID such as `0x00c3`. Actions: `default`, `back`, `forward`, `middleClick`, `missionControl`, `appExpose`, `showDesktop`, `launchpad`, `desktopLeft`, `desktopRight`, `screenshot`, `gestures`. The Actions Ring needs the app.
+- Unknown keys and out-of-range values are errors. `freespinctl daemon --check --config <file>` validates a file. `SIGHUP` reloads it, and `SIGTERM` gives the wheel back to macOS.
+- The default config is `~/.config/freespin/config.json`. Flow is app-only for now.
+
+With home-manager, the flake provides a module that installs the signed release binary, writes the config and runs the LaunchAgent. A typo in `settings` fails `home-manager switch`:
+
+```nix
+{
+  inputs.freespin.url = "github:nklmilojevic/freespin";
+  # in your home-manager modules:
+  imports = [ inputs.freespin.homeManagerModules.default ];
+  services.freespin = {
+    enable = true;
+    settings = {
+      devices."MX Master 3S" = { dpi = 1600; buttons.gesture = "gestures"; };
+    };
+  };
+}
+```
+
+With Homebrew:
+
+```fish
+brew install --cask nklmilojevic/freespin/freespin   # the app, which updates itself
+brew install nklmilojevic/freespin/freespinctl       # the CLI; `brew services start freespinctl` runs the daemon
+```
+
+The Nix agent runs a copy of the binary at `~/Library/Application Support/Freespin/bin/freespinctl`, so its Accessibility and Input Monitoring grants survive updates. On first start, grant both to that file. The daemon waits and starts once they're on. Logs go to `~/Library/Logs/freespin.log`.
+
+## Releases and updates
+
+The app checks for updates with [Sparkle](https://sparkle-project.org). It reads `appcast.xml` from the latest GitHub release, so nothing else is hosted. "Check for Updates…" and automatic checks are in the gear menu.
+
+Pushing a `v*` tag makes CI sign the app, `freespinctl` and the DMG with the Developer ID, notarize them, staple the app and the DMG, and publish the DMG, the CLI tarball, `SHA256SUMS` and `appcast.xml`. It needs these repository secrets:
+
+| Secret | What it is |
+|---|---|
+| `DEVELOPER_ID_P12`, `DEVELOPER_ID_P12_PASSWORD` | the Developer ID Application certificate and key, base64-encoded `.p12` |
+| `NOTARY_KEY_P8`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID` | an App Store Connect API key for `notarytool`, base64-encoded `.p8` |
+| `SPARKLE_PRIVATE_KEY` | the EdDSA key from Sparkle's `generate_keys -x`; its public half is `SUPublicEDKey` in `scripts/build-app.sh` |
+
+A signed, notarized build on your own Mac:
+
+```fish
+SIGN_IDENTITY="Developer ID Application: …" NOTARY_PROFILE=<notarytool profile> ./scripts/dmg.sh
+./scripts/appcast.sh <version>          # signs with the key in your login keychain
+```
+
+After a release, `scripts/update-nix-release.sh <version>` points the Nix package at it. The Homebrew tap updates itself.
+
 ## How it works
 
 ```

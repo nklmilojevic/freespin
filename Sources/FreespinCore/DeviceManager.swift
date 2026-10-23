@@ -30,7 +30,7 @@ public final class DeviceManager: @unchecked Sendable {
     public var onBatteryAlert: (@Sendable (DeviceSnapshot, BatteryAlertPolicy.Alert) -> Void)?
 
     private let hid = HIDManager()
-    private let store: SettingsStore
+    private let store: any DeviceSettingsStore
     private let lock = NSLock()
     private var sessions: [String: [UInt8: DeviceSession]] = [:]  // interface key → device index → session
     private var receivers: [String: ReceiverContext] = [:]
@@ -38,7 +38,7 @@ public final class DeviceManager: @unchecked Sendable {
     /// When false (the default), devices are only inspected; nothing is written to them.
     public let drive: Bool
 
-    public init(store: SettingsStore = .shared, drive: Bool = false) {
+    public init(store: any DeviceSettingsStore = SettingsStore.shared, drive: Bool = false) {
         self.store = store
         self.drive = drive
     }

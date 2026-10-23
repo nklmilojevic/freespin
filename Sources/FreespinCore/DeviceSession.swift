@@ -40,7 +40,7 @@ public final class DeviceSession: @unchecked Sendable {
     let queue = DispatchQueue(label: "freespin.session", qos: .userInteractive)
     let clock: ScrollClock
     let poster: ScrollEventPoster
-    private let store: SettingsStore
+    private let store: any DeviceSettingsStore
     var processor = WheelProcessor()
     /// Separate engine instance for the thumbwheel (horizontal), sharing the injector like Options+.
     var thumbProcessor = WheelProcessor()
@@ -62,7 +62,7 @@ public final class DeviceSession: @unchecked Sendable {
     private var originalWheelMode: WheelMode?
     private var wheelHandler: UUID?
 
-    public init(device: HIDPPDevice, info: HIDInterfaceInfo, store: SettingsStore = .shared,
+    public init(device: HIDPPDevice, info: HIDInterfaceInfo, store: any DeviceSettingsStore = SettingsStore.shared,
                 poster: ScrollEventPoster = ScrollEventPoster(), clock: ScrollClock = SystemClock()) {
         self.device = device
         self.info = info
@@ -76,7 +76,7 @@ public final class DeviceSession: @unchecked Sendable {
                                   deviceIndex: device.deviceIndex, features: [], dpiList: [])
     }
 
-    public var settings: DeviceSettings { store.settings(for: snapshot.id) }
+    public var settings: DeviceSettings { store.settings(for: snapshot) }
 
     /// Reads identity and capabilities. Only when `drive` is true does it divert the wheel and apply
     /// stored settings; discovery alone never writes to the device.
@@ -114,9 +114,9 @@ public final class DeviceSession: @unchecked Sendable {
 
     /// First time we see a device, adopt what it is currently configured to instead of imposing defaults.
     private func seedSettingsIfNew() {
-        guard !store.hasSettings(for: snapshot.id) else { return }
+        guard !store.hasSettings(for: snapshot) else { return }
         let snap = snapshot
-        store.update(snap.id) { s in
+        store.update(snap) { s in
             if let ss = snap.smartShift {
                 s.smartShiftEnabled = ss.autoDisengage != 0xFF && ss.mode != .freespin
                 if ss.autoDisengage != 0xFF, ss.autoDisengage > 0 { s.smartShiftSensitivity = Int(ss.autoDisengage) }
@@ -190,7 +190,12 @@ public final class DeviceSession: @unchecked Sendable {
     }
 
     public func update(_ body: @escaping (inout DeviceSettings) -> Void) async throws {
-        store.update(snapshot.id, body)
+        store.update(snapshot, body)
+        try await reapply()
+    }
+
+    /// Re-applies the store's current settings, e.g. after the daemon reloads its config.
+    public func reapply() async throws {
         if driving { try await apply(settings.effective(for: FrontmostAppMonitor.shared.bundleID)) }
         onChange?(snapshot)
     }
@@ -198,8 +203,7 @@ public final class DeviceSession: @unchecked Sendable {
     /// Mirrors `devio_feature_2121_gesture::_set_parameters`: diverted = smooth, highRes = smooth.
     private var lastApplied: DeviceSettings?
 
-    /// Pushes settings to the engine immediately and to the device only for fields that changed.
-    public func apply(_ s: DeviceSettings) async throws {
+    private func setEngine(_ s: DeviceSettings) {
         let multiplier = Int(snapshot.wheel?.multiplier ?? 1)
         queue.sync {
             processor.settings = s.wheelSettings
@@ -211,12 +215,23 @@ public final class DeviceSession: @unchecked Sendable {
             thumbProcessor.settings = thumb
             thumbProcessor.deviceMultiplier = snapshot.thumbwheel?.multiplier ?? 1
         }
+    }
+
+    /// Pushes settings to the engine immediately and to the device only for fields that changed.
+    public func apply(_ s: DeviceSettings) async throws {
         let previous = lastApplied
-        lastApplied = s
+        setEngine(s)
         if snapshot.has(.hiResWheel), previous?.smoothScrolling != s.smoothScrolling {
             let mode = WheelMode(diverted: s.smoothScrolling, highResolution: s.smoothScrolling, inverted: false)
-            _ = try await device.setWheelMode(mode)
+            do {
+                _ = try await device.setWheelMode(mode)
+            } catch {
+                // The device kept its old mode: so does the engine, and the next apply retries the write.
+                if let previous { setEngine(previous) }
+                throw error
+            }
         }
+        lastApplied = s
         if let current = snapshot.smartShift,
            previous == nil || previous?.smartShiftEnabled != s.smartShiftEnabled
             || previous?.smartShiftSensitivity != s.smartShiftSensitivity || previous?.smartShiftTorque != s.smartShiftTorque {
