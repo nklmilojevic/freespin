@@ -6,6 +6,7 @@ import Foundation
 public final class SystemPointer: FlowPointer, @unchecked Sendable {
     public var cornerInset: CGFloat = 0
     private var monitors: [Any] = []
+    private var keyMonitors: [Any] = []
     private var filter = EdgePushFilter()
     private var callback: (@Sendable (FlowEdge, Double, Bool) -> Void)?
     private var lastFraction = 0.0
@@ -44,6 +45,24 @@ public final class SystemPointer: FlowPointer, @unchecked Sendable {
 
     public func configure(_ settings: FlowSettings) {
         cornerInset = settings.avoidCorners ? 24 : 0
+    }
+
+    public func watchKeys(_ handler: (@Sendable () -> Void)?) {
+        DispatchQueue.main.async {
+            self.keyMonitors.forEach(NSEvent.removeMonitor)
+            self.keyMonitors.removeAll()
+            guard let handler else { return }
+            let mask: NSEvent.EventTypeMask = [.keyDown, .flagsChanged]
+            if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { _ in handler() }) {
+                self.keyMonitors.append(global)
+            }
+            if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { e in
+                handler()
+                return e
+            }) {
+                self.keyMonitors.append(local)
+            }
+        }
     }
 
     private func stopMonitors() {

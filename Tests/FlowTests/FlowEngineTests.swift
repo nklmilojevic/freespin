@@ -142,7 +142,7 @@ final class FlowEngineTests: XCTestCase {
 
         XCTAssertEqual(mouseA.switches, [1], "A told the mouse to go to B's channel")
         XCTAssertEqual(keyboardA.switches, [1], "linked keyboard follows")
-        XCTAssertEqual(a.pointer.retreats, [.right])
+        XCTAssertTrue(a.pointer.retreats.isEmpty, "the mouse left, so the cursor stays where it was")
         let warp = try XCTUnwrap(b.pointer.warps.first, "B placed its cursor")
         XCTAssertEqual(warp.x, 2, "entered through B's left edge, where A sits")
         XCTAssertEqual(warp.y, 270, accuracy: 1)
@@ -171,6 +171,72 @@ final class FlowEngineTests: XCTestCase {
         waitUntil("skip") { a.events.contains { if case .skipped = $0 { return true }; return false } }
         XCTAssertTrue(m.switches.isEmpty)
         XCTAssertTrue(b.pointer.warps.isEmpty)
+    }
+
+    func testFailedSwitchRetreatsAndUnknownKeyboardIsReported() throws {
+        let a = try makeHost("A"), b = try makeHost("B")
+        pair(a, b)
+        let m = mouse(channel: 0, present: true)
+        m.failSwitch = true
+        let keyboard = SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                channel: 0, channelCount: 3))
+        a.engine.setDevices([m, keyboard])
+        b.engine.setDevices([mouse(channel: 1, present: false)])  // B has never seen the keyboard
+        waitUntil("inventory") { a.engine.settings.peer(b.hostID)?.channel(for: unit) == 1 }
+        waitUntil("pointer") { a.pointer.isRunning }
+        a.pointer.push(.right)
+        waitUntil("flow out attempted") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
+        XCTAssertEqual(a.pointer.retreats, [.right], "the mouse didn't leave, so the cursor backs off the edge")
+        XCTAssertTrue(keyboard.switches.isEmpty)
+        XCTAssertTrue(a.events.contains { if case let .skipped(m) = $0 { return m.contains("MX Keys has no channel") }; return false })
+    }
+
+    func testSleepingKeyboardFollowsTheMouseWhenItWakes() throws {
+        let a = try makeHost("A"), b = try makeHost("B")
+        pair(a, b)
+        let m = mouse(channel: 0, present: true)
+        let keyboardA = SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                 channel: 0, channelCount: 3))
+        let keyboardB = SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                 channel: 1, channelCount: 3))
+        keyboardB.present = false
+        a.engine.setDevices([m, keyboardA])
+        b.engine.setDevices([mouse(channel: 1, present: false), keyboardB])
+        waitUntil("inventory") { a.engine.settings.peer(b.hostID)?.channel(for: keyboardUnit) == 1 }
+        waitUntil("pointer") { a.pointer.isRunning }
+
+        // Asleep: the switch command is lost and the keyboard stays on A's channel.
+        keyboardA.failSwitch = true
+        a.pointer.push(.right)
+        waitUntil("flowed out") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
+        XCTAssertTrue(a.pointer.isWatchingKeys)
+
+        // Awake: the next key press sends it after the mouse.
+        keyboardA.failSwitch = false
+        XCTAssertTrue(a.pointer.pressKey())
+        waitUntil("keyboard followed") { a.events.contains(.keyboardFollowed(unitID: keyboardUnit, channel: 1)) }
+        XCTAssertEqual(keyboardA.switches, [1])
+        waitUntil("stops watching keys") { !a.pointer.isWatchingKeys }
+    }
+
+    func testSwitchedKeyboardIsNotSentAgain() throws {
+        let a = try makeHost("A"), b = try makeHost("B")
+        pair(a, b)
+        let keyboard = SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                channel: 0, channelCount: 3))
+        a.engine.setDevices([mouse(channel: 0, present: true), keyboard])
+        b.engine.setDevices([mouse(channel: 1, present: false),
+                             SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                      channel: 1, channelCount: 3))])
+        waitUntil("inventory") { a.engine.settings.peer(b.hostID)?.channel(for: keyboardUnit) == 1 }
+        waitUntil("pointer") { a.pointer.isRunning }
+        a.pointer.push(.right)
+        waitUntil("flowed out") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
+        XCTAssertEqual(keyboard.switches, [1])
+        a.pointer.pressKey()
+        a.engine.queue.sync {}
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertEqual(keyboard.switches, [1], "it left, so it doesn't answer on A's channel and isn't switched again")
     }
 
     func testRequireControlKey() throws {

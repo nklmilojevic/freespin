@@ -18,14 +18,17 @@ public protocol FlowPointer: AnyObject, Sendable {
     func stop()
     var geometry: EdgeGeometry { get }
     func warp(to point: CGPoint)
-    /// Moves the cursor a little away from `edge` after flowing out, so it doesn't bounce back.
+    /// Moves the cursor a little away from `edge` when a flow out didn't move the mouse, so it doesn't bounce back.
     func retreat(from edge: FlowEdge)
     /// Applies pointer-related settings (corner avoidance).
     func configure(_ settings: FlowSettings)
+    /// Calls `handler` on every key press while set; nil stops. Only says a key was pressed, never which.
+    func watchKeys(_ handler: (@Sendable () -> Void)?)
 }
 
 extension FlowPointer {
     public func configure(_ settings: FlowSettings) {}
+    public func watchKeys(_ handler: (@Sendable () -> Void)?) {}
 }
 
 public protocol FlowClipboard: AnyObject, Sendable {
@@ -88,6 +91,8 @@ public enum FlowEvent: Sendable, Equatable {
     case inventory(hostID: String, devices: [FlowDeviceRecord])
     case flowedOut(hostID: String, edge: FlowEdge, switched: [String: Int])
     case flowedIn(hostID: String, point: CGPoint)
+    /// A keyboard that slept through a flow out woke up and was sent after the mouse.
+    case keyboardFollowed(unitID: String, channel: Int)
     case clipboardSent(items: Int)
     case clipboardReceived(items: Int)
     case skipped(String)
@@ -117,11 +122,18 @@ public final class FlowEngine: @unchecked Sendable {
     private var pointerRunning = false
     private var lastEvent: String?
     private var started = false
+    /// Keyboards to send after the mouse once they wake: unit ID → target channel and deadline.
+    private var follow: [String: (channel: Int, until: Date)] = [:]
+    private var followBusy = false
+    private var watchingKeys = false
 
     /// How long the receiver gets to place its cursor before the switch is abandoned.
     public var readyTimeout: TimeInterval = 0.8
     /// After a switch, edge hits are ignored for this long (the cursor was just placed at an edge).
     public var cooldown: TimeInterval = 0.8
+    /// A sleeping keyboard misses SetCurrentHost; for this long after a flow out it follows the mouse
+    /// as soon as it wakes (a key press or reconnect) and is still on this computer's channel.
+    public var followWindow: TimeInterval = 60
 
     public init(identity: FlowIdentity, name: String, store: FlowSettingsStore, pointer: FlowPointer,
                 clipboard: FlowClipboard, bonjour: Bool = true) {
@@ -156,6 +168,8 @@ public final class FlowEngine: @unchecked Sendable {
             links.values.forEach { $0.close() }
             links.removeAll()
             stopPointer()
+            follow.removeAll()
+            updateKeyWatch()
         }
     }
 
@@ -182,6 +196,7 @@ public final class FlowEngine: @unchecked Sendable {
             self.store.update { s in for d in list { s.upsert(local: d.record) } }
             self.broadcastInventory()
             self.updatePointer()
+            self.followKeyboards()
             self.publish()
         }
     }
@@ -488,12 +503,14 @@ public final class FlowEngine: @unchecked Sendable {
             link.send(.clipboard(items))
             emit(.clipboardSent(items: items.count))
         }
+        let candidates = devices.values.filter { $0.record.kind == .mouse || ($0.record.kind == .keyboard && s.linkKeyboard) }
+        for d in candidates where d.record.kind == .keyboard && paired.channel(for: d.record.unitID) == nil {
+            emit(.skipped("\(d.record.name) has no channel on \(peer.name); connect it there once with Freespin running"))
+        }
         // Keyboards first: once the mouse leaves, this computer may lose the receiver link too.
-        let targets = devices.values
-            .filter { $0.record.kind == .mouse || ($0.record.kind == .keyboard && s.linkKeyboard) }
+        let targets = candidates
             .compactMap { d in paired.channel(for: d.record.unitID).map { (d, $0) } }
             .sorted { ($0.0.record.kind == .keyboard ? 0 : 1) < ($1.0.record.kind == .keyboard ? 0 : 1) }
-        pointer.retreat(from: edge)
         Task {
             var switched: [String: Int] = [:]
             for (device, channel) in targets {
@@ -505,17 +522,76 @@ public final class FlowEngine: @unchecked Sendable {
                 }
             }
             self.queue.async {
+                // The mouse stayed here: move the cursor off the edge so it doesn't push straight through again.
+                let mouseLeft = targets.contains { $0.0.record.kind == .mouse && switched[$0.0.record.unitID] != nil }
+                if !mouseLeft { self.pointer.retreat(from: edge) }
                 self.busy = false
                 self.quietUntil = Date().addingTimeInterval(self.cooldown)
                 for id in switched.keys { self.present.remove(id) }
+                // Asleep or not, any linked keyboard may have missed the switch; one that got it is no longer
+                // on this computer's channel, so following it later is a no-op.
+                if mouseLeft, s.linkKeyboard {
+                    let until = Date().addingTimeInterval(self.followWindow)
+                    for k in s.localDevices where k.kind == .keyboard {
+                        if let ch = paired.channel(for: k.unitID) { self.follow[k.unitID] = (ch, until) }
+                    }
+                    self.updateKeyWatch()
+                    self.queue.asyncAfter(deadline: .now() + self.followWindow) { self.followKeyboards() }
+                }
                 self.emit(.flowedOut(hostID: peer.hostID, edge: edge, switched: switched))
                 self.publish()
             }
         }
     }
 
+    /// Sends keyboards that slept through a flow out after the mouse, once they answer on this computer's channel.
+    private func followKeyboards() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        let now = Date()
+        follow = follow.filter { $0.value.until > now }
+        updateKeyWatch()
+        guard !followBusy else { return }
+        let due = follow.compactMap { id, f in devices[id].map { ($0, f.channel) } }
+        guard !due.isEmpty else { return }
+        followBusy = true
+        Task {
+            var done: [String: Int] = [:]
+            for (device, channel) in due where await device.isPresent() {
+                do {
+                    try await device.switchHost(to: channel)
+                    done[device.record.unitID] = channel
+                } catch {
+                    self.emit(.error("switch \(device.record.name) to channel \(channel + 1) failed: \(error)"))
+                }
+            }
+            self.queue.async {
+                self.followBusy = false
+                for (id, channel) in done {
+                    self.follow[id] = nil
+                    self.present.remove(id)
+                    self.emit(.keyboardFollowed(unitID: id, channel: channel))
+                }
+                self.updateKeyWatch()
+                if !done.isEmpty { self.publish() }
+            }
+        }
+    }
+
+    private func updateKeyWatch() {
+        let want = !follow.isEmpty
+        guard want != watchingKeys else { return }
+        watchingKeys = want
+        guard want else { pointer.watchKeys(nil); return }
+        pointer.watchKeys { [weak self] in
+            guard let self else { return }
+            self.queue.async { self.followKeyboards() }
+        }
+    }
+
     private func flowIn(id: UInt32, edge: FlowEdge, fraction: Double, from link: PeerLink) {
         guard let peer = link.peer else { return }
+        follow.removeAll()
+        updateKeyWatch()
         if let point = pointer.geometry.entryPoint(edge: edge, fraction: fraction) {
             pointer.warp(to: point)
             emit(.flowedIn(hostID: peer.hostID, point: point))

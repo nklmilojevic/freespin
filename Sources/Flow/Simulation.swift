@@ -9,6 +9,8 @@ public final class SimulatedDevice: FlowLocalDevice, @unchecked Sendable {
     private var history: [Int] = []
     /// Called after a switch, with the new channel.
     public var onSwitch: (@Sendable (Int) -> Void)?
+    /// Makes `switchHost` throw, like a device that dropped off mid-switch.
+    public var failSwitch = false
 
     public init(record: FlowDeviceRecord) {
         self.record = record
@@ -25,6 +27,7 @@ public final class SimulatedDevice: FlowLocalDevice, @unchecked Sendable {
     public func isPresent() async -> Bool { present }
 
     public func switchHost(to channel: Int) async throws {
+        if failSwitch { throw CocoaError(.featureUnsupported) }
         lock.withLock {
             history.append(channel)
             connected = channel == record.channel
@@ -39,6 +42,7 @@ public final class ScriptedPointer: FlowPointer, @unchecked Sendable {
     private var handler: (@Sendable (FlowEdge, Double, Bool) -> Void)?
     private var warpLog: [CGPoint] = []
     private var retreatLog: [FlowEdge] = []
+    private var keyHandler: (@Sendable () -> Void)?
     public let geometry: EdgeGeometry
 
     public init(geometry: EdgeGeometry = EdgeGeometry(displays: [CGRect(x: 0, y: 0, width: 1920, height: 1080)])) {
@@ -58,6 +62,18 @@ public final class ScriptedPointer: FlowPointer, @unchecked Sendable {
     public func warp(to point: CGPoint) { lock.withLock { warpLog.append(point) } }
 
     public func retreat(from edge: FlowEdge) { lock.withLock { retreatLog.append(edge) } }
+
+    public func watchKeys(_ handler: (@Sendable () -> Void)?) { lock.withLock { keyHandler = handler } }
+
+    public var isWatchingKeys: Bool { lock.withLock { keyHandler != nil } }
+
+    /// Simulates a key press. Returns false while nothing is watching keys.
+    @discardableResult
+    public func pressKey() -> Bool {
+        guard let h = lock.withLock({ keyHandler }) else { return false }
+        h()
+        return true
+    }
 
     /// Simulates the cursor being pushed through `edge`. Returns false while Flow isn't watching.
     @discardableResult
