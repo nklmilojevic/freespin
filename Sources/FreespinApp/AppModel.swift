@@ -26,6 +26,8 @@ final class AppModel {
     var startError: String?
     var flow = FlowStatus()
     var flowError: String?
+    /// Another computer asked to pair; the sheet showing its code needs a visible window.
+    @ObservationIgnored var onIncomingPairing: (() -> Void)?
 
     /// FREESPIN_INSPECT_ONLY=1 shows devices without diverting the wheel or writing settings.
     private let manager = DeviceManager(drive: ProcessInfo.processInfo.environment["FREESPIN_INSPECT_ONLY"] != "1")
@@ -82,7 +84,12 @@ final class AppModel {
                                                            stateDirectory: env["FREESPIN_FLOW_DIR"].map { URL(fileURLWithPath: $0) },
                                                            name: env["FREESPIN_FLOW_NAME"])
             coordinator.engine.onStatus = { [weak self] status in
-                Task { @MainActor in self?.flow = status }
+                Task { @MainActor in
+                    guard let self else { return }
+                    let incoming = status.pairing.map { !$0.outgoing && $0.hostID != self.flow.pairing?.hostID } ?? false
+                    self.flow = status
+                    if incoming { self.onIncomingPairing?() }
+                }
             }
             coordinator.engine.onEvent = { [weak self] event in
                 guard case let .error(message) = event else { return }

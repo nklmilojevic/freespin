@@ -54,6 +54,7 @@ public final class FlowCoordinator: @unchecked Sendable {
     public let engine: FlowEngine
     private let lock = NSLock()
     private var probed: [ObjectIdentifier: HIDPPFlowDevice] = [:]
+    private var live: Set<ObjectIdentifier> = []
     private var generation = 0
     private let canSwitch: Bool
 
@@ -84,13 +85,15 @@ public final class FlowCoordinator: @unchecked Sendable {
     public func sessionsChanged(_ sessions: [DeviceSession]) {
         let gen: Int = lock.withLock {
             generation += 1
-            let live = Set(sessions.map { ObjectIdentifier($0) })
+            live = Set(sessions.map { ObjectIdentifier($0) })
             probed = probed.filter { live.contains($0.key) }
             return generation
         }
         Task {
             for s in sessions where lock.withLock({ probed[ObjectIdentifier(s)] == nil }) {
-                if let d = await HIDPPFlowDevice.probe(s, canSwitch: canSwitch) { lock.withLock { probed[ObjectIdentifier(s)] = d } }
+                guard let d = await HIDPPFlowDevice.probe(s, canSwitch: canSwitch) else { continue }
+                // A newer call may have dropped this session (it disconnected) while the probe was out.
+                lock.withLock { if live.contains(ObjectIdentifier(s)) { probed[ObjectIdentifier(s)] = d } }
             }
             let list: [FlowLocalDevice]? = lock.withLock { gen == generation ? Array(probed.values) : nil }
             if let list { engine.setDevices(list) }

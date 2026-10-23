@@ -6,7 +6,7 @@ import Foundation
 public final class SystemPointer: FlowPointer, @unchecked Sendable {
     public var cornerInset: CGFloat = 0
     private var monitors: [Any] = []
-    private var keyMonitors: [Any] = []
+    private var inputMonitors: [Any] = []
     private var filter = EdgePushFilter()
     private var callback: (@Sendable (FlowEdge, Double, Bool) -> Void)?
     private var lastFraction = 0.0
@@ -44,23 +44,27 @@ public final class SystemPointer: FlowPointer, @unchecked Sendable {
     }
 
     public func configure(_ settings: FlowSettings) {
-        cornerInset = settings.avoidCorners ? 24 : 0
+        let inset: CGFloat = settings.avoidCorners ? 24 : 0
+        // `handle` reads it on the main queue.
+        DispatchQueue.main.async { self.cornerInset = inset }
     }
 
-    public func watchKeys(_ handler: (@Sendable () -> Void)?) {
+    public func watchInput(_ handler: (@Sendable (FlowInput) -> Void)?) {
         DispatchQueue.main.async {
-            self.keyMonitors.forEach(NSEvent.removeMonitor)
-            self.keyMonitors.removeAll()
+            self.inputMonitors.forEach(NSEvent.removeMonitor)
+            self.inputMonitors.removeAll()
             guard let handler else { return }
-            let mask: NSEvent.EventTypeMask = [.keyDown, .flagsChanged]
-            if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { _ in handler() }) {
-                self.keyMonitors.append(global)
+            let mask: NSEvent.EventTypeMask = [.keyDown, .flagsChanged, .mouseMoved, .leftMouseDown, .rightMouseDown,
+                                               .otherMouseDown, .scrollWheel]
+            let report: (NSEvent) -> Void = { e in handler(e.type == .keyDown || e.type == .flagsChanged ? .key : .pointer) }
+            if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: report) {
+                self.inputMonitors.append(global)
             }
             if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { e in
-                handler()
+                report(e)
                 return e
             }) {
-                self.keyMonitors.append(local)
+                self.inputMonitors.append(local)
             }
         }
     }
@@ -82,11 +86,12 @@ public final class SystemPointer: FlowPointer, @unchecked Sendable {
         }
     }
 
-    public func warp(to point: CGPoint) {
+    public func warp(to point: CGPoint, then done: @escaping @Sendable () -> Void) {
         DispatchQueue.main.async {
             CGWarpMouseCursorPosition(point)
             // Without this the next physical move is swallowed by the post-warp suppression interval.
             CGAssociateMouseAndMouseCursorPosition(1)
+            done()
         }
     }
 
@@ -127,8 +132,8 @@ public final class SystemClipboard: FlowClipboard, @unchecked Sendable {
         return items
     }
 
+    /// An empty list clears the pasteboard.
     public func apply(_ items: [ClipboardItem]) {
-        guard !items.isEmpty else { return }
         DispatchQueue.main.async {
             let pb = NSPasteboard.general
             pb.clearContents()

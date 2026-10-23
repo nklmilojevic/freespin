@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        model.onIncomingPairing = { [weak self] in self?.showMainWindow() }
         model.start()
         Updater.shared.start()
         if launchedAtLogin {

@@ -42,7 +42,7 @@ public final class ScriptedPointer: FlowPointer, @unchecked Sendable {
     private var handler: (@Sendable (FlowEdge, Double, Bool) -> Void)?
     private var warpLog: [CGPoint] = []
     private var retreatLog: [FlowEdge] = []
-    private var keyHandler: (@Sendable () -> Void)?
+    private var inputHandler: (@Sendable (FlowInput) -> Void)?
     public let geometry: EdgeGeometry
 
     public init(geometry: EdgeGeometry = EdgeGeometry(displays: [CGRect(x: 0, y: 0, width: 1920, height: 1080)])) {
@@ -59,19 +59,22 @@ public final class ScriptedPointer: FlowPointer, @unchecked Sendable {
 
     public func stop() { lock.withLock { handler = nil } }
 
-    public func warp(to point: CGPoint) { lock.withLock { warpLog.append(point) } }
+    public func warp(to point: CGPoint, then done: @escaping @Sendable () -> Void) {
+        lock.withLock { warpLog.append(point) }
+        done()
+    }
 
     public func retreat(from edge: FlowEdge) { lock.withLock { retreatLog.append(edge) } }
 
-    public func watchKeys(_ handler: (@Sendable () -> Void)?) { lock.withLock { keyHandler = handler } }
+    public func watchInput(_ handler: (@Sendable (FlowInput) -> Void)?) { lock.withLock { inputHandler = handler } }
 
-    public var isWatchingKeys: Bool { lock.withLock { keyHandler != nil } }
+    public var isWatchingInput: Bool { lock.withLock { inputHandler != nil } }
 
-    /// Simulates a key press. Returns false while nothing is watching keys.
+    /// Simulates a key press, or pointer use with `.pointer`. Returns false while nothing is watching input.
     @discardableResult
-    public func pressKey() -> Bool {
-        guard let h = lock.withLock({ keyHandler }) else { return false }
-        h()
+    public func input(_ kind: FlowInput = .key) -> Bool {
+        guard let h = lock.withLock({ inputHandler }) else { return false }
+        h(kind)
         return true
     }
 

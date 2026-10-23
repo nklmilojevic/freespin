@@ -83,6 +83,7 @@ struct FlowSimOptions {
             default: throw FlowSimError.usage("unknown option \(a)")
             }
         }
+        guard every.isFinite, every > 0 else { throw FlowSimError.usage("--every must be a positive number of seconds") }
     }
 }
 

@@ -18,6 +18,7 @@ mode=${MODE:-bonjour}
 duration=${DURATION:-20}
 port=47100
 expect=$((duration / 6))
+if (( expect < 1 )); then echo "DURATION must be at least 6 seconds" >&2; exit 1; fi
 
 tart list | awk 'NR > 1 { print $2 }' | grep -qx "$vm" || tart clone "$image" "$vm"
 swift build -c release --product freespinctl >/dev/null
@@ -41,7 +42,8 @@ echo "VM $vm at $ip ($(tart exec "$vm" sw_vers -productVersion)), mode $mode"
 logs=$(mktemp -d)
 tart exec "$vm" rm -rf /tmp/flow-sim
 vm_args=(--name "Flow VM" --dir /tmp/flow-sim --channel 2 --keyboard 0badf00d
-         --pair --peer-name "Flow Host" --side left --push left --every 1 --duration $((duration + 4)) --expect "$expect")
+         --pair --peer-name "Flow Host" --side left --push left --every 1 --copy "clipboard from VM"
+         --duration $((duration + 4)) --expect "$expect")
 host_args=(--name "Flow Host" --dir "$logs/host" --port "$port" --channel 1 --here --keyboard 0badf00d
            --auto-accept --side right --push right --every 1 --copy "clipboard from host"
            --duration "$duration" --expect "$expect")
@@ -62,6 +64,13 @@ wait "$host_job" || host_rc=$?
 echo "--- host ($host_rc)"; cat "$logs/host.log"
 echo "--- vm ($vm_rc)"; cat "$logs/vm.log"
 grep -q 'clipboard received.*clipboard from host' "$logs/vm.log" || { echo "FAIL: clipboard did not reach the VM"; exit 1; }
+grep -q 'clipboard received.*clipboard from VM' "$logs/host.log" || { echo "FAIL: clipboard did not reach the host"; exit 1; }
+# Flow counts include flows whose switch failed; require real SetCurrentHost calls for both devices on both sides.
+for side in host vm; do
+  for device in "Simulated MX Master" "Simulated MX Keys"; do
+    grep -q "SetCurrentHost.*$device leaves" "$logs/$side.log" || { echo "FAIL: $device never switched from the $side"; exit 1; }
+  done
+done
 if [ "$host_rc" = 0 ] && [ "$vm_rc" = 0 ]; then
   echo "PASS: Flow ping-pong between host and VM ($mode)"
 else

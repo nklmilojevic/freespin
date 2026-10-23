@@ -7,15 +7,17 @@ import XCTest
 final class TestHost: @unchecked Sendable {
     let name: String
     let engine: FlowEngine
-    let pointer = ScriptedPointer()
+    let pointer: ScriptedPointer
     let clipboard = MemoryClipboard()
     let dir: URL
     private let lock = NSLock()
     private var log: [FlowEvent] = []
     private var lastStatus = FlowStatus()
 
-    init(_ name: String, identity: FlowIdentity = FlowIdentity(), dir: URL? = nil) throws {
+    init(_ name: String, identity: FlowIdentity = FlowIdentity(), dir: URL? = nil, port: UInt16 = 0,
+         displays: [CGRect] = [CGRect(x: 0, y: 0, width: 1920, height: 1080)]) throws {
         self.name = name
+        pointer = ScriptedPointer(geometry: EdgeGeometry(displays: displays))
         self.dir = dir ?? FileManager.default.temporaryDirectory.appendingPathComponent("flow-\(UUID().uuidString)")
         engine = FlowEngine(identity: identity, name: name, store: FlowSettingsStore(url: self.dir.appendingPathComponent("flow.json")),
                             pointer: pointer, clipboard: clipboard, bonjour: false)
@@ -23,7 +25,7 @@ final class TestHost: @unchecked Sendable {
         engine.cooldown = 0.2
         engine.onEvent = { [weak self] e in self?.lock.withLock { self?.log.append(e) } }
         engine.onStatus = { [weak self] s in self?.lock.withLock { self?.lastStatus = s } }
-        try engine.start()
+        try engine.start(port: port)
     }
 
     var events: [FlowEvent] { lock.withLock { log } }
@@ -209,14 +211,45 @@ final class FlowEngineTests: XCTestCase {
         keyboardA.failSwitch = true
         a.pointer.push(.right)
         waitUntil("flowed out") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
-        XCTAssertTrue(a.pointer.isWatchingKeys)
+        XCTAssertTrue(a.pointer.isWatchingInput)
 
         // Awake: the next key press sends it after the mouse.
         keyboardA.failSwitch = false
-        XCTAssertTrue(a.pointer.pressKey())
+        XCTAssertTrue(a.pointer.input(.key))
         waitUntil("keyboard followed") { a.events.contains(.keyboardFollowed(unitID: keyboardUnit, channel: 1)) }
         XCTAssertEqual(keyboardA.switches, [1])
-        waitUntil("stops watching keys") { !a.pointer.isWatchingKeys }
+        waitUntil("stops watching input") { !a.pointer.isWatchingInput }
+    }
+
+    func testPointerUseHereKeepsTheKeyboard() throws {
+        let a = try makeHost("A"), b = try makeHost("B")
+        pair(a, b)
+        let keyboard = SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                channel: 0, channelCount: 3))
+        a.engine.setDevices([mouse(channel: 0, present: true), keyboard])
+        b.engine.setDevices([mouse(channel: 1, present: false),
+                             SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                      channel: 1, channelCount: 3))])
+        waitUntil("inventory") { a.engine.settings.peer(b.hostID)?.channel(for: keyboardUnit) == 1 }
+        waitUntil("pointer") { a.pointer.isRunning }
+        keyboard.failSwitch = true
+        a.pointer.push(.right)
+        waitUntil("flowed out") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
+        keyboard.failSwitch = false
+
+        // Motion right after the flow out is the departing mouse, not the user.
+        a.pointer.input(.pointer)
+        a.engine.queue.sync {}
+        XCTAssertTrue(a.pointer.isWatchingInput)
+
+        // Later pointer use means someone is working here (mouse switched back by hand, or a trackpad).
+        Thread.sleep(forTimeInterval: 0.3)
+        a.pointer.input(.pointer)
+        waitUntil("follow cancelled") { !a.pointer.isWatchingInput }
+        a.pointer.input(.key)
+        a.engine.queue.sync {}
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertTrue(keyboard.switches.isEmpty, "the keyboard stays with the user")
     }
 
     func testSwitchedKeyboardIsNotSentAgain() throws {
@@ -233,10 +266,79 @@ final class FlowEngineTests: XCTestCase {
         a.pointer.push(.right)
         waitUntil("flowed out") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
         XCTAssertEqual(keyboard.switches, [1])
-        a.pointer.pressKey()
+        a.pointer.input(.key)
         a.engine.queue.sync {}
         Thread.sleep(forTimeInterval: 0.1)
         XCTAssertEqual(keyboard.switches, [1], "it left, so it doesn't answer on A's channel and isn't switched again")
+    }
+
+    func testKeyboardStaysWhenTheMouseSwitchFails() throws {
+        let a = try makeHost("A"), b = try makeHost("B")
+        pair(a, b)
+        let m = mouse(channel: 0, present: true)
+        m.failSwitch = true
+        let keyboard = SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                channel: 0, channelCount: 3))
+        a.engine.setDevices([m, keyboard])
+        b.engine.setDevices([mouse(channel: 1, present: false),
+                             SimulatedDevice(record: FlowDeviceRecord(unitID: keyboardUnit, name: "MX Keys", kind: .keyboard,
+                                                                      channel: 1, channelCount: 3))])
+        waitUntil("inventory") { a.engine.settings.peer(b.hostID)?.channel(for: keyboardUnit) == 1 }
+        waitUntil("pointer") { a.pointer.isRunning }
+        a.pointer.push(.right)
+        waitUntil("flow out attempted") { a.events.contains { if case .flowedOut = $0 { return true }; return false } }
+        XCTAssertTrue(keyboard.switches.isEmpty, "a keyboard that left couldn't be called back, so it waits for the mouse")
+        XCTAssertEqual(a.pointer.retreats, [.right])
+        XCTAssertFalse(a.pointer.isWatchingInput, "nothing to follow when the mouse stayed")
+    }
+
+    func testNoReadyWithoutADisplay() throws {
+        let a = try makeHost("A")
+        let b = try TestHost("B", displays: [])
+        hosts.append(b)
+        waitUntil("B listening") { b.port != nil }
+        pair(a, b)
+        let m = mouse(channel: 0, present: true)
+        a.engine.setDevices([m])
+        b.engine.setDevices([mouse(channel: 1, present: false)])
+        waitUntil("inventory") { a.engine.settings.peer(b.hostID)?.channel(for: unit) == 1 }
+        waitUntil("pointer") { a.pointer.isRunning }
+        a.pointer.push(.right)
+        waitUntil("A gives up", timeout: 4) { a.events.contains(.skipped("B did not answer")) }
+        XCTAssertTrue(m.switches.isEmpty, "the mouse stays when the other computer can't place a cursor")
+    }
+
+    func testEmptyClipboardIsCarriedOver() throws {
+        let a = try makeHost("A"), b = try makeHost("B")
+        pair(a, b)
+        b.clipboard.apply([ClipboardItem(type: "public.utf8-plain-text", data: Data("old".utf8))])
+        a.engine.setDevices([mouse(channel: 0, present: true)])
+        b.engine.setDevices([mouse(channel: 1, present: false)])
+        waitUntil("inventory") { a.engine.settings.peer(b.hostID)?.channel(for: unit) == 1 }
+        waitUntil("pointer") { a.pointer.isRunning }
+        a.clipboard.copy([])
+        a.pointer.push(.right)
+        waitUntil("clipboard cleared on B") { b.clipboard.contents.isEmpty }
+    }
+
+    func testPairedLinkIsRedialedAfterItDrops() throws {
+        let a = try makeHost("A")
+        let idB = FlowIdentity()
+        var b = try TestHost("B", identity: idB)
+        hosts.append(b)
+        waitUntil("B listening") { b.port != nil }
+        let port = try XCTUnwrap(b.port)
+        pair(a, b)
+        a.engine.redialDelay = 0.1
+        let found = DiscoveredHost(hostID: b.hostID, name: "B", endpoint: b.endpoint())
+        a.engine.queue.sync { a.engine.node.onDiscovered?([found]) }
+
+        b.engine.stop()
+        waitUntil("A sees the link drop") { a.events.contains(.linkDown(hostID: b.hostID)) }
+        // Same computer back on the same address; Bonjour results never changed, so only a redial reconnects.
+        b = try TestHost("B", identity: idB, dir: b.dir, port: port)
+        hosts.append(b)
+        waitUntil("A redials and is trusted again", timeout: 10) { a.events.contains(.linkUp(hostID: b.hostID, trusted: true)) }
     }
 
     func testRequireControlKey() throws {
