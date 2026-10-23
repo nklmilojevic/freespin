@@ -37,13 +37,16 @@ Memory is the physical footprint reported by `top`. Idle CPU is the process's CP
 - **Gesture button**: click, or hold and move for Mission Control, App Exposé and switching desktops. An experimental "trackpad swipes" style uses the Dock's swipe gestures instead of shortcuts.
 - **Actions Ring**: hold a button and a radial menu of eight actions appears at the cursor; move toward one and release.
 - **Per-app settings**: different scroll speed, smoothness, direction or buttons while a given app is frontmost.
+- **Logi Bolt and Unifying receivers**: devices behind a receiver show up and disconnect live, and you can pair and unpair from the app. Bolt pairing uses the same two-button confirmation as Options+, one highlighted button at a time.
 - **Low-battery notifications** at 15 % and 5 %.
 - **Keyboard**: Fn-key inversion and backlight for Logitech keyboards that support them (implemented, not yet tested on hardware).
 - A regular windowed app. Closing the window keeps the mouse working; quitting gives the wheel back to macOS.
 
 Not included: Flow, Smart Actions (macros), firmware updates, accounts, analytics, webcam and presenter features.
 
-Tested on an MX Master 3S over Bluetooth. Other HID++ 2.0 mice and Bolt/Unifying receivers use the same code paths but haven't been tried yet.
+<p align="center"><img src="docs/bolt-pairing.png" width="680" alt="Pairing an MX Master 3S with a Logi Bolt receiver"></p>
+
+Tested on an MX Master 3S over Bluetooth and through a Logi Bolt receiver. Other HID++ 2.0 mice and Unifying receivers use the same code paths but haven't been tried yet.
 
 ## Build
 
@@ -72,6 +75,8 @@ launchctl bootstrap gui/(id -u) /Library/LaunchAgents/com.logi.optionsplus.plist
 swift run freespinctl list        # devices, battery, DPI
 swift run freespinctl features    # HID++ feature table
 swift run freespinctl controls    # divertable buttons and their reporting state
+swift run freespinctl receivers   # Bolt/Unifying receivers and their devices
+swift run freespinctl pair        # pair a new device to the receiver
 swift run freespinctl sniff       # print HID++ notifications
 swift run freespinctl trace out.jsonl   # record wheel reports and scroll events
 swift run freespinctl run         # headless scroll engine

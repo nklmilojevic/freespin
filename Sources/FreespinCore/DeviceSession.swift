@@ -69,7 +69,10 @@ public final class DeviceSession: @unchecked Sendable {
         self.store = store
         self.poster = poster
         self.clock = clock
-        snapshot = DeviceSnapshot(id: "", name: info.product, productID: info.productID, transport: info.transport,
+        // Behind a receiver the HID product name is the receiver's; use a neutral name until 0x0005 answers.
+        let initialName = device.deviceIndex == HIDPPDeviceIndex.direct ? info.product : "Device \(device.deviceIndex)"
+        snapshot = DeviceSnapshot(id: "", name: initialName, productID: info.productID,
+                                  transport: device.deviceIndex == HIDPPDeviceIndex.direct ? info.transport : "Logi receiver",
                                   deviceIndex: device.deviceIndex, features: [], dpiList: [])
     }
 

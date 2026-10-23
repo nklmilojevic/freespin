@@ -20,18 +20,24 @@ public final class HIDPPDevice: @unchecked Sendable {
     private var notificationHandlers: [UInt8: [UUID: NotificationHandler]] = [:]
     private var anyHandlers: [UUID: NotificationHandler] = [:]
 
-    private final class Pending {
+    private final class Pending: @unchecked Sendable {
         let featureIndex: UInt8
         let function: UInt8
         let softwareID: UInt8
+        /// HID++ 1.0 register request: match byte 2 (sub ID) and byte 3 (register) exactly.
+        let register10: UInt8?
         let continuation: CheckedContinuation<[UInt8], Error>
         var finished = false
-        init(featureIndex: UInt8, function: UInt8, softwareID: UInt8, continuation: CheckedContinuation<[UInt8], Error>) {
+        init(featureIndex: UInt8, function: UInt8, softwareID: UInt8, register10: UInt8? = nil,
+             continuation: CheckedContinuation<[UInt8], Error>) {
             self.featureIndex = featureIndex
             self.function = function
             self.softwareID = softwareID
+            self.register10 = register10
             self.continuation = continuation
         }
+
+        var byte3: UInt8 { register10 ?? (function << 4 | softwareID) }
     }
 
     public init(transport: HIDPPTransport, deviceIndex: UInt8 = HIDPPDeviceIndex.direct) {
@@ -152,6 +158,33 @@ public final class HIDPPDevice: @unchecked Sendable {
         }
     }
 
+    // MARK: - HID++ 1.0 registers (receivers)
+
+    public enum RegisterAccess: UInt8, Sendable {
+        case setShort = 0x80, getShort = 0x81, setLong = 0x82, getLong = 0x83
+    }
+
+    /// HID++ 1.0 register read/write. Short registers use report 0x10 (3 params), long ones 0x11 (16).
+    public func register(_ access: RegisterAccess, _ reg: UInt8, _ params: [UInt8] = []) async throws -> [UInt8] {
+        await requestGate.wait()
+        defer { requestGate.signal() }
+        let long = access == .setLong
+        var bytes: [UInt8] = [long ? HIDPPReportID.long.rawValue : HIDPPReportID.short.rawValue, deviceIndex, access.rawValue, reg]
+        bytes += params.prefix(long ? 16 : 3)
+        let total = long ? HIDPPReportID.long.totalLength : HIDPPReportID.short.totalLength
+        bytes += Array(repeating: 0, count: max(0, total - bytes.count))
+        let timeout = requestTimeout
+        return try await withCheckedThrowingContinuation { continuation in
+            let p = Pending(featureIndex: access.rawValue, function: reg >> 4, softwareID: reg & 0x0F,
+                            register10: reg, continuation: continuation)
+            lock.withLock { pending = p }
+            do { try transport.send(bytes) } catch { finish(p, with: .failure(error)); return }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak self] in
+                self?.finish(p, with: .failure(HIDPPError.timeout))
+            }
+        }
+    }
+
     private func finish(_ request: Pending, with result: Result<[UInt8], Error>) {
         let shouldResume: Bool = lock.withLock {
             guard !request.finished else { return false }
@@ -166,19 +199,21 @@ public final class HIDPPDevice: @unchecked Sendable {
     public func handle(_ msg: HIDPPMessage) {
         let current = lock.withLock { pending }
         if let current {
-            if msg.featureIndex == HIDPPMessage.errorFeatureIndex20,
+            if current.register10 == nil, msg.featureIndex == HIDPPMessage.errorFeatureIndex20,
                msg.parameters.byte(0) == current.featureIndex,
-               msg.parameters.byte(1) == (current.function << 4 | current.softwareID) {
+               msg.parameters.byte(1) == current.byte3 {
                 let code = HIDPP20Error(rawValue: msg.parameters.byte(2)) ?? .unknown
                 finish(current, with: .failure(HIDPPError.device(code)))
                 return
             }
-            if msg.featureIndex == HIDPPMessage.errorSubID10, msg.parameters.byte(0) == current.featureIndex {
-                finish(current, with: .failure(HIDPPError.device10(msg.parameters.byte(2))))
+            // HID++ 1.0 error: [0x10, dev, 0x8F, original byte 2, original byte 3, error code, 0].
+            if msg.featureIndex == HIDPPMessage.errorSubID10,
+               (msg.function << 4 | msg.softwareID) == current.featureIndex,
+               msg.parameters.byte(0) == current.byte3 {
+                finish(current, with: .failure(HIDPPError.device10(msg.parameters.byte(1))))
                 return
             }
-            if msg.featureIndex == current.featureIndex, msg.function == current.function,
-               msg.softwareID == current.softwareID {
+            if msg.featureIndex == current.featureIndex, (msg.function << 4 | msg.softwareID) == current.byte3 {
                 finish(current, with: .success(msg.parameters))
                 return
             }
